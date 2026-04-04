@@ -1,33 +1,34 @@
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Headers', '*');
 
   if (req.method === 'OPTIONS') {
-    return res.status(200).end();
+    res.status(200).end();
+    return;
   }
 
-  const { endpoint } = req.query;
+  const endpoint = req.query.endpoint;
   if (!endpoint) {
-    return res.status(400).json({ error: 'Missing endpoint parameter' });
+    res.status(400).json({ error: 'Missing endpoint' });
+    return;
   }
 
   const apiKey = process.env.HCP_API_KEY;
   const url = `https://api.housecallpro.com/${endpoint}`;
 
   try {
-    const response = await fetch(url, {
+    const hcpRes = await fetch(url, {
       method: req.method,
       headers: {
         'Authorization': `Token ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: req.method !== 'GET' ? JSON.stringify(req.body) : undefined
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      }
     });
-
-    const data = await response.json();
-    return res.status(response.status).json(data);
-  } catch (error) {
-    return res.status(500).json({ error: error.message });
+    const json = await hcpRes.json();
+    res.status(hcpRes.status).json(json);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 }
