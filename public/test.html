@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>LHS SMS Test</title>
+  <style>
+    body { font-family: sans-serif; max-width: 500px; margin: 40px auto; padding: 20px; }
+    input, textarea { width: 100%; padding: 10px; margin: 8px 0 16px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; box-sizing: border-box; }
+    button { width: 100%; padding: 12px; background: #2d6a4f; color: white; border: none; border-radius: 6px; font-size: 15px; cursor: pointer; }
+    #result { margin-top: 16px; padding: 12px; border-radius: 6px; display: none; font-size: 13px; }
+    .ok { background: #EAF3DE; color: #3B6D11; }
+    .err { background: #FCEBEB; color: #A32D2D; }
+  </style>
+</head>
+<body>
+  <h2>🏠 LHS SMS Tester</h2>
+  <p style="color:#666;font-size:13px">From: 604-330-3997</p>
+
+  <label>To (mobile number)</label>
+  <input id="to" placeholder="+16041234567" type="tel" />
+
+  <label>Message</label>
+  <textarea id="msg" rows="4">Hi! This is your Lifestyle Home Service scheduling assistant. If you received this, everything is working! 🏠</textarea>
+
+  <button onclick="send()">Send SMS</button>
+  <div id="result"></div>
+
+<script>
+async function send() {
+  const to = document.getElementById('to').value.trim();
+  const message = document.getElementById('msg').value.trim();
+  const el = document.getElementById('result');
+  el.style.display = 'block';
+  el.className = '';
+  el.textContent = 'Sending...';
+
+  try {
+    const res = await fetch('https://lhs-scheduler-proxy.vercel.app/api/sms', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ to, message })
+    });
+    const data = await res.json();
+    if (data.sid) {
+      el.className = 'ok';
+      el.textContent = '✓ Sent! SID: ' + data.sid;
+    } else {
+      el.className = 'err';
+      el.textContent = 'Error: ' + (data.message || data.error || JSON.stringify(data));
+    }
+  } catch(e) {
+    el.className = 'err';
+    el.textContent = 'Error: ' + e.message;
+  }
+}
+</script>
+</body>
+</html>
