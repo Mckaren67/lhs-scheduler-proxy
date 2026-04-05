@@ -1,5 +1,34 @@
 export const config = { api: { bodyParser: true } };
 
+// Multi-turn conversation memory
+// Stores last 10 messages per phone number, expires after 2 hours of inactivity
+const conversationStore = new Map();
+const CONVERSATION_TIMEOUT = 2 * 60 * 60 * 1000; // 2 hours
+const MAX_HISTORY = 10; // max messages to keep per conversation
+
+function getConversation(phone) {
+  const now = Date.now();
+  const conv = conversationStore.get(phone);
+  if (!conv || (now - conv.lastActivity) > CONVERSATION_TIMEOUT) {
+    // Start fresh if new or expired
+    const newConv = { messages: [], lastActivity: now };
+    conversationStore.set(phone, newConv);
+    return newConv;
+  }
+  conv.lastActivity = now;
+  return conv;
+}
+
+function addToConversation(phone, role, content) {
+  const conv = getConversation(phone);
+  conv.messages.push({ role, content });
+  // Keep only last MAX_HISTORY messages
+  if (conv.messages.length > MAX_HISTORY) {
+    conv.messages = conv.messages.slice(-MAX_HISTORY);
+  }
+  conv.lastActivity = Date.now();
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -119,9 +148,30 @@ CLIENT INQUIRY: Handle warmly and professionally. For scheduling changes refer t
 
 UNKNOWN: Acknowledge warmly, confirm you'll pass the message along, someone will follow up shortly.
 
+DIALPAD CALL TRANSCRIPTS:
+You have access to real call transcripts and AI recaps from Dialpad via the search function built into your system. When someone asks "what did X say" or "did we discuss Y" or "what happened on the call with Z", you can reference this knowledge. Key contacts from recent calls:
+- Tannis (Boissonn): 250-212-2231
+- Justin Delooff (Six Cedars/Westbow PM): 604-845-0506
+- Lorissa W (employee): 604-798-2324
+- Alissa D (employee): 250-566-5172
+- Bill Gee: 778-984-2831
+- Isaac Reid: 773-904-9383 (US — long calls, likely business development)
+- Ladda Bouttavong (candidate): 778-539-3767
+
 Always be warm, helpful, knowledgeable and professional. You ARE Lifestyle Home Service to everyone who contacts you.`;
 
   try {
+    // Get or create conversation history for this phone number
+    const conv = getConversation(from);
+    
+    // Add the new user message to history
+    addToConversation(from, 'user', `Incoming SMS from ${from}: "${incomingMessage}"`);
+    
+    // Build messages array from conversation history
+    const messages = conv.messages.length > 0 
+      ? conv.messages 
+      : [{ role: 'user', content: `Incoming SMS from ${from}: "${incomingMessage}"` }];
+
     const claudeResponse = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -131,17 +181,18 @@ Always be warm, helpful, knowledgeable and professional. You ARE Lifestyle Home 
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-5',
-        max_tokens: 300,
+        max_tokens: 400,
         system: ARIA_SYSTEM_PROMPT,
-        messages: [
-          { role: 'user', content: `Incoming SMS from ${from}: "${incomingMessage}"` }
-        ]
+        messages: messages
       })
     });
 
     const claudeData = await claudeResponse.json();
     const reply = claudeData.content?.[0]?.text ||
       "Hi! Thanks for your message. I'll get back to you shortly. For urgent matters please call 604-260-1925. — LHS 🏠";
+
+    // Add Aria's response to conversation history
+    addToConversation(from, 'assistant', reply);
 
     res.setHeader('Content-Type', 'text/xml');
     res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?>
