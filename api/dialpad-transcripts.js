@@ -75,8 +75,8 @@ export default async function handler(req, res) {
       const data = await dialpad('/call', params);
       const calls = (data.items || data.calls || []).map(c => ({
         call_id: c.id,
-        date: c.date_started ? new Date(c.date_started * 1000).toLocaleDateString('en-CA') : 'unknown',
-        time: c.date_started ? new Date(c.date_started * 1000).toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' }) : '',
+        date: c.date_started ? new Date(c.date_started).toLocaleDateString('en-CA') : 'unknown',
+        time: c.date_started ? new Date(c.date_started).toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' }) : '',
         direction: c.direction || 'unknown',
         duration_min: c.duration ? Math.round(c.duration / 60) : 0,
         from: fmtPhone(c.contact?.phone || c.caller_id),
