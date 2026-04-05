@@ -72,7 +72,7 @@ export default async function handler(req, res) {
     // ── ACTION: list recent calls (with optional phone filter) ────────────────
     if (action === 'calls' || !action) {
       const params = { limit: Math.min(parseInt(limit), 50) };
-      const data = await dialpad('/calls', params);
+      const data = await dialpad('/call', params);
       const calls = (data.items || data.calls || []).map(c => ({
         call_id: c.id,
         date: c.date_started ? new Date(c.date_started * 1000).toLocaleDateString('en-CA') : 'unknown',
