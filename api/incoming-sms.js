@@ -40,61 +40,147 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
   }
 }
 
-async function fetchTodaysJobs() {
+async function fetchHCPJobs(startDate, endDate, label) {
+  const apiKey = process.env.HCP_API_KEY;
+  const fetchUrl = `https://api.housecallpro.com/jobs?scheduled_start_min=${startDate}&scheduled_start_max=${endDate}&page_size=200`;
+  console.log(`[HCP-${label}] Fetching:`, fetchUrl);
+  const response = await fetchWithTimeout(fetchUrl, {
+    headers: {
+      'Authorization': `Token ${apiKey}`,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    }
+  }, 10000);
+  console.log(`[HCP-${label}] Response status:`, response.status);
+  if (!response.ok) {
+    const errText = await response.text();
+    console.error(`[HCP-${label}] Error:`, response.status, errText);
+    return [];
+  }
+  const data = await response.json();
+  console.log(`[HCP-${label}] Jobs returned:`, data.jobs?.length ?? 0);
+  return data.jobs || [];
+}
+
+async function fetchHCPSchedule() {
   try {
     const now = new Date();
     const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
     const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59).toISOString();
+    const thirtyDaysOut = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 30, 23, 59, 59).toISOString();
 
-    // Call HouseCall Pro API directly (not through proxy) to avoid self-referential serverless call
-    const apiKey = process.env.HCP_API_KEY;
-    const fetchUrl = `https://api.housecallpro.com/jobs?scheduled_start_min=${startOfDay}&scheduled_start_max=${endOfDay}&page_size=200`;
-    console.log('[HCP] Fetching directly:', fetchUrl);
-    const response = await fetchWithTimeout(fetchUrl, {
-      headers: {
-        'Authorization': `Token ${apiKey}`,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      }
-    });
-    console.log('[HCP] Response status:', response.status);
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error('[HCP] Error response:', response.status, errText);
-      return { schedule: `Schedule fetch failed (HTTP ${response.status}).`, jobs: [] };
+    // Fetch today's jobs and next 30 days in parallel
+    const [todayJobs, futureJobs] = await Promise.all([
+      fetchHCPJobs(startOfDay, endOfDay, 'TODAY'),
+      fetchHCPJobs(startOfDay, thirtyDaysOut, 'MONTH')
+    ]);
+
+    // Build today's schedule text
+    let scheduleText = 'No jobs scheduled for today.';
+    if (todayJobs.length > 0) {
+      const lines = todayJobs.map(job => {
+        const name = `${job.customer?.first_name || ''} ${job.customer?.last_name || ''}`.trim() || 'Unknown';
+        const addr = job.address?.street || 'No address';
+        const city = job.address?.city || '';
+        const status = job.work_status || 'unknown';
+        const desc = job.description || 'No description';
+        const employees = (job.assigned_employees || []).map(e => `${e.first_name} ${e.last_name}`).join(', ') || 'Unassigned';
+
+        const start = job.schedule?.scheduled_start;
+        const end = job.schedule?.scheduled_end;
+        const startTime = start ? new Date(start).toLocaleTimeString('en-CA', { timeZone: 'America/Vancouver', hour: 'numeric', minute: '2-digit' }) : '?';
+        const endTime = end ? new Date(end).toLocaleTimeString('en-CA', { timeZone: 'America/Vancouver', hour: 'numeric', minute: '2-digit' }) : '?';
+
+        const amount = job.total_amount ? `$${(job.total_amount / 100).toFixed(2)}` : '';
+
+        return `• ${startTime}–${endTime} | ${name} | ${addr}, ${city} | ${desc} | Assigned: ${employees} | Status: ${status} | ${amount}`;
+      });
+      scheduleText = `${todayJobs.length} job(s) today:\n${lines.join('\n')}`;
     }
-    const data = await response.json();
-    console.log('[HCP] Jobs returned:', data.jobs?.length ?? 0, 'Total:', data.total_items ?? 'unknown');
 
-    if (!data.jobs || data.jobs.length === 0) return { schedule: 'No jobs scheduled for today.', jobs: [] };
-
-    const lines = data.jobs.map(job => {
-      const name = `${job.customer?.first_name || ''} ${job.customer?.last_name || ''}`.trim() || 'Unknown';
-      const addr = job.address?.street || 'No address';
-      const city = job.address?.city || '';
-      const status = job.work_status || 'unknown';
-      const desc = job.description || 'No description';
-      const employees = (job.assigned_employees || []).map(e => `${e.first_name} ${e.last_name}`).join(', ') || 'Unassigned';
-
-      const start = job.schedule?.scheduled_start;
-      const end = job.schedule?.scheduled_end;
-      const startTime = start ? new Date(start).toLocaleTimeString('en-CA', { timeZone: 'America/Vancouver', hour: 'numeric', minute: '2-digit' }) : '?';
-      const endTime = end ? new Date(end).toLocaleTimeString('en-CA', { timeZone: 'America/Vancouver', hour: 'numeric', minute: '2-digit' }) : '?';
-
-      const amount = job.total_amount ? `$${(job.total_amount / 100).toFixed(2)}` : '';
-
-      return `• ${startTime}–${endTime} | ${name} | ${addr}, ${city} | ${desc} | Assigned: ${employees} | Status: ${status} | ${amount}`;
-    });
+    // Analyze recurring patterns from the 30-day window
+    const patterns = analyzeRecurringPatterns(futureJobs);
 
     return {
-      schedule: `${data.total_items} job(s) today:\n${lines.join('\n')}`,
-      jobs: data.jobs
+      schedule: scheduleText,
+      jobs: todayJobs,
+      patterns: patterns
     };
   } catch (err) {
     const reason = err.name === 'AbortError' ? 'Request timed out after 8s' : err.message;
     console.error('[HCP] Fetch exception:', reason, err.stack);
-    return { schedule: `Schedule data temporarily unavailable (${reason}).`, jobs: [] };
+    return { schedule: `Schedule data temporarily unavailable (${reason}).`, jobs: [], patterns: '' };
   }
+}
+
+function analyzeRecurringPatterns(jobs) {
+  if (!jobs || jobs.length === 0) return '';
+
+  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+  // Group jobs by customer name
+  const customerJobs = {};
+  for (const job of jobs) {
+    const name = `${job.customer?.first_name || ''} ${job.customer?.last_name || ''}`.trim();
+    if (!name || job.work_status === 'pro canceled' || job.deleted_at) continue;
+
+    if (!customerJobs[name]) customerJobs[name] = [];
+
+    const start = job.schedule?.scheduled_start;
+    if (start) {
+      const d = new Date(start);
+      customerJobs[name].push({
+        date: d,
+        day: dayNames[d.getUTCDay()],
+        cleaner: (job.assigned_employees || []).map(e => `${e.first_name} ${e.last_name}`).join(', '),
+        status: job.work_status
+      });
+    }
+  }
+
+  // Analyze each customer's pattern
+  const lines = [];
+  for (const [name, visits] of Object.entries(customerJobs)) {
+    if (visits.length < 2) continue; // Need 2+ visits to detect a pattern
+
+    // Sort by date
+    visits.sort((a, b) => a.date - b.date);
+
+    // Count which days they're booked on
+    const dayCounts = {};
+    for (const v of visits) {
+      dayCounts[v.day] = (dayCounts[v.day] || 0) + 1;
+    }
+    const primaryDay = Object.entries(dayCounts).sort((a, b) => b[1] - a[1])[0][0];
+
+    // Calculate average gap between visits in days
+    let totalGap = 0;
+    for (let i = 1; i < visits.length; i++) {
+      totalGap += (visits[i].date - visits[i - 1].date) / (1000 * 60 * 60 * 24);
+    }
+    const avgGap = totalGap / (visits.length - 1);
+
+    // Determine frequency from actual gaps
+    let frequency;
+    if (avgGap <= 8) frequency = 'Weekly';
+    else if (avgGap <= 16) frequency = 'Biweekly';
+    else if (avgGap <= 35) frequency = 'Monthly';
+    else frequency = `Every ~${Math.round(avgGap)} days`;
+
+    // Who cleans most often
+    const cleanerCounts = {};
+    for (const v of visits) {
+      if (v.cleaner) cleanerCounts[v.cleaner] = (cleanerCounts[v.cleaner] || 0) + 1;
+    }
+    const usualCleaner = Object.entries(cleanerCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || 'Varies';
+
+    lines.push(`  ${name}: ${frequency} ${primaryDay}s | Usually cleaned by: ${usualCleaner} | ${visits.length} visits in 30 days`);
+  }
+
+  if (lines.length === 0) return '';
+
+  console.log(`[HCP] Patterns detected for ${lines.length} clients`);
+  return lines.join('\n');
 }
 
 async function fetchClientPreferences() {
@@ -119,7 +205,7 @@ async function fetchClientPreferences() {
 }
 
 function buildScheduleContext(hcpResult, clientData) {
-  const { schedule, jobs } = hcpResult;
+  const { schedule, jobs, patterns } = hcpResult;
   const { clients, cleaners } = clientData;
 
   // Build a lookup of client preferences by name (lowercase for matching)
@@ -182,7 +268,11 @@ function buildScheduleContext(hcpResult, clientData) {
     ? `\n\nHIGH-PRIORITY CLIENTS (never miss, always assign preferred cleaner):\n${highPriority}`
     : '';
 
-  return `${schedule}${mergedNotes}${cleanerSummary}${highPrioritySummary}`;
+  const patternsSummary = patterns
+    ? `\n\nRECURRING CLIENT PATTERNS (detected from actual HCP bookings over next 30 days):\n${patterns}`
+    : '';
+
+  return `${schedule}${mergedNotes}${cleanerSummary}${highPrioritySummary}${patternsSummary}`;
 }
 
 export default async function handler(req, res) {
@@ -198,13 +288,13 @@ export default async function handler(req, res) {
 
   console.log(`[ARIA] Incoming SMS from ${from}: "${incomingMessage}"`);
 
-  // Fetch live schedule and client preferences in parallel
+  // Fetch live schedule (today + 30-day patterns) and client preferences in parallel
   const [hcpResult, clientData] = await Promise.all([
-    fetchTodaysJobs(),
+    fetchHCPSchedule(),
     fetchClientPreferences()
   ]);
   const scheduleContext = buildScheduleContext(hcpResult, clientData);
-  console.log(`[ARIA] Context built — HCP jobs: ${hcpResult.jobs.length}, KB clients: ${clientData.clients.length}, cleaners: ${clientData.cleaners.length}`);
+  console.log(`[ARIA] Context built — HCP today: ${hcpResult.jobs.length}, KB clients: ${clientData.clients.length}, cleaners: ${clientData.cleaners.length}`);
 
   const ARIA_SYSTEM_PROMPT = `You are Aria, the intelligent AI assistant for Lifestyle Home Service (LHS), a professional residential and commercial cleaning company based in Chilliwack, BC, Canada.
 
@@ -337,12 +427,19 @@ SCHEDULING RULES:
 - Commercial clients have strict schedules — never reschedule without Karen's direct approval
 - If a cleaner is assigned to a client they're not preferred for, mention it proactively so Karen can review
 
-IMPORTANT — DO NOT FLAG CLIENTS AS MISSING UNLESS THEIR PREFERRED DAY IS TODAY:
-- Each client has a preferred_day (e.g. "Thursday", "Monday"). Clients are only expected on their preferred day
-- A weekly client whose preferred day is Thursday is NOT missing on Monday — they are simply not scheduled today
-- Only flag a client as potentially missing if ALL of these are true: (1) their preferred_day matches today's day of the week, (2) their frequency suggests they should have a job today (weekly = every week, biweekly = every other week), AND (3) they do not appear in today's live schedule
-- If someone asks about a specific client, tell them the client's preferred day and cleaner — do not say they are "missing" just because today is not their day
-- When listing today's schedule, only show jobs that are actually scheduled today — do not add warnings about clients who are scheduled for other days
+RECURRING CLIENT PATTERNS:
+- The "RECURRING CLIENT PATTERNS" section is derived from ACTUAL booked jobs in HouseCall Pro over the next 30 days — this is the ground truth for each client's real schedule
+- Use these patterns (not just the knowledge base preferred_day) to determine when a client is actually scheduled
+- If a pattern says "Weekly Mondays" that means HCP has them booked on Mondays — trust this over manually entered preferences
+- "Usually cleaned by" tells you who HCP actually assigns to that client, which may differ from the KB preferred cleaner
+
+IMPORTANT — DO NOT FLAG CLIENTS AS MISSING UNLESS THEIR ACTUAL PATTERN DAY IS TODAY:
+- Check the RECURRING CLIENT PATTERNS to see which day a client is actually booked on
+- A client with pattern "Weekly Thursdays" is NOT missing on Monday — they are simply not scheduled today
+- Only flag a client as potentially missing if ALL of these are true: (1) their pattern day matches today's day of the week, (2) their frequency suggests they should have a job today, AND (3) they do not appear in today's live schedule
+- If someone asks about a specific client, tell them the client's actual schedule day and usual cleaner from the pattern data
+- When listing today's schedule, only show jobs that are actually scheduled today — do not add warnings about clients scheduled for other days
+- If the pattern data and knowledge base disagree, trust the pattern data (it comes from real bookings)
 
 Always be warm, helpful, knowledgeable and professional. You ARE Lifestyle Home Service to everyone who contacts you.`;
 
