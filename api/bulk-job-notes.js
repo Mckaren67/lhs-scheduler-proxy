@@ -175,20 +175,8 @@ export default async function handler(req, res) {
       }
     }
 
-    // 6. Confirm back to Karen
-    if (adminPhone) {
-      const rangeDays = Math.round((new Date(end) - new Date(start)) / 86400000);
-      let confirmMsg = `Done! Added note to ${succeeded} ${clientName} job${succeeded !== 1 ? 's' : ''}.`;
-      if (failed > 0) confirmMsg += ` ${failed} failed.`;
-      if (notified.length > 0) {
-        confirmMsg += ` ${notified.join(' and ')} ${notified.length === 1 ? 'has' : 'have'} been notified.`;
-      }
-      if (notifyFailed.length > 0) confirmMsg += ` Could not reach: ${notifyFailed.join(', ')}.`;
-      confirmMsg += ' — LHS 🏠';
-
-      await sendSMS(adminPhone, confirmMsg);
-      console.log('[BULK-NOTES] Confirmation sent to admin:', confirmMsg);
-    }
+    // 6. Return results (incoming-sms.js awaits this and builds Karen's TwiML reply)
+    console.log(`[BULK-NOTES] Complete: ${succeeded} noted, ${failed} failed, notified: ${notified.join(', ') || 'none'}`);
 
     return res.status(200).json({
       matched: matchedJobs.length,
