@@ -1,4 +1,5 @@
 export const config = { api: { bodyParser: true }, maxDuration: 60 };
+import { executeBulkNotes } from './bulk-job-notes.js';
 
 // Multi-turn conversation memory
 // Stores last 10 messages per phone number, expires after 2 hours of inactivity
@@ -543,47 +544,35 @@ You can add notes to client jobs in HouseCall Pro. When asked to add a note to a
       const { client, note, range_days } = toolUse.input;
       console.log(`[BULK-NOTES] Tool call: client="${client}", note="${note}", range=${range_days || 90} days`);
 
-      // Karen's TwiML reply — never contains JSON
-      twimlReply = textBlock?.text?.trim() || `On it! Adding "${note}" to ${client} jobs. I'll text you the confirmation shortly. — LHS 🏠`;
-
-      // Dispatch to bulk-job-notes worker and AWAIT it before returning
-      // (Vercel kills the function after res.send, so fire-and-forget doesn't work)
-      const baseUrl = process.env.VERCEL_URL
-        ? `https://${process.env.VERCEL_URL}`
-        : 'https://lhs-scheduler-proxy.vercel.app';
-
+      // Execute bulk notes directly (no HTTP self-call — Vercel blocks those)
       try {
-        console.log(`[BULK-NOTES] Dispatching and awaiting worker...`);
-        const workerResp = await fetchWithTimeout(`${baseUrl}/api/bulk-job-notes`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${process.env.INTERNAL_SECRET}`
-          },
-          body: JSON.stringify({
-            clientName: client,
-            noteContent: note,
-            dateRangeStart: new Date().toISOString(),
-            dateRangeEnd: new Date(Date.now() + (range_days || 90) * 86400000).toISOString(),
-            adminPhone: from,
-            timestamp: new Date().toISOString()
-          })
-        }, 25000); // 25s timeout — worker does notes + SMS
-        const workerResult = await workerResp.json();
-        console.log(`[BULK-NOTES] Worker result:`, JSON.stringify(workerResult));
+        console.log(`[BULK-NOTES] Executing inline...`);
+        const result = await executeBulkNotes({
+          clientName: client,
+          noteContent: note,
+          dateRangeStart: new Date().toISOString(),
+          dateRangeEnd: new Date(Date.now() + (range_days || 90) * 86400000).toISOString(),
+          adminPhone: from,
+          timestamp: new Date().toISOString()
+        });
+        console.log(`[BULK-NOTES] Result:`, JSON.stringify(result));
 
-        // Update twimlReply with actual results if worker succeeded
-        if (workerResult.noted > 0) {
-          let msg = `Done! Added note to ${workerResult.noted} ${client} job${workerResult.noted !== 1 ? 's' : ''}.`;
-          if (workerResult.notified?.length > 0) {
-            msg += ` ${workerResult.notified.join(' and ')} ${workerResult.notified.length === 1 ? 'has' : 'have'} been notified.`;
+        if (result.noted > 0) {
+          let msg = `Done! Added note to ${result.noted} ${client} job${result.noted !== 1 ? 's' : ''}.`;
+          if (result.notified?.length > 0) {
+            msg += ` ${result.notified.join(' and ')} ${result.notified.length === 1 ? 'has' : 'have'} been notified.`;
           }
+          if (result.failed > 0) msg += ` ${result.failed} failed.`;
           msg += ' — LHS 🏠';
           twimlReply = msg;
+        } else if (result.matched === 0) {
+          twimlReply = `No upcoming jobs found for "${client}". Double-check the name? — LHS 🏠`;
+        } else {
+          twimlReply = textBlock?.text?.trim() || `On it! Adding "${note}" to ${client} jobs. — LHS 🏠`;
         }
       } catch (err) {
-        console.error('[BULK-NOTES] Worker call failed:', err.message);
-        // Keep the original twimlReply — Karen still gets acknowledgment
+        console.error('[BULK-NOTES] Execution failed:', err.message);
+        twimlReply = `Sorry, something went wrong adding notes for ${client}. Please try again. — LHS 🏠`;
       }
     } else {
       // Normal text response (no tool call)
