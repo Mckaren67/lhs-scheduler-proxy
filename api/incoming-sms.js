@@ -318,7 +318,13 @@ export default async function handler(req, res) {
   const from = body.From || '';
   const incomingMessage = body.Body || '';
 
-  console.log(`[ARIA] Incoming SMS from ${from}: "${incomingMessage}"`);
+  // Admin detection — only admin phones can trigger write operations
+  const ADMIN_PHONES = (process.env.ADMIN_PHONE_NUMBERS || '6048009630')
+    .split(',').map(p => p.trim().replace(/\D/g, ''));
+  const senderDigits = from.replace(/\D/g, '');
+  const isAdmin = ADMIN_PHONES.some(p => senderDigits.includes(p) || p.includes(senderDigits));
+
+  console.log(`[ARIA] Incoming SMS from ${from} (admin: ${isAdmin}): "${incomingMessage}"`);
 
   // Fetch today's jobs and client preferences in parallel (patterns come from cache)
   const [hcpResult, clientData] = await Promise.all([
@@ -475,7 +481,31 @@ IMPORTANT — DO NOT FLAG CLIENTS AS MISSING UNLESS THEIR ACTUAL PATTERN DAY IS 
 - When listing today's schedule, only show jobs that are actually scheduled today — do not add warnings about clients scheduled for other days
 - If the pattern data and knowledge base disagree, trust the pattern data (it comes from real bookings)
 
-Always be warm, helpful, knowledgeable and professional. You ARE Lifestyle Home Service to everyone who contacts you.`;
+Always be warm, helpful, knowledgeable and professional. You ARE Lifestyle Home Service to everyone who contacts you.`
+  + (isAdmin ? `
+
+ADMIN CAPABILITIES (you are texting with Karen or another admin):
+You can add notes to client jobs in HouseCall Pro. When asked to add a note to a client's jobs:
+
+1. Output a JSON action block on the VERY FIRST LINE of your response, followed by a newline:
+   {"action":"bulk_note","client":"Valley Toyota","note":"Use the back entrance starting next week","range_days":90}
+
+2. Then on the NEXT LINE, write your friendly confirmation message to Karen.
+
+range_days guide based on what the admin says:
+- "today's job" or "today" = 1
+- "this week" = 7
+- "next 2 weeks" = 14
+- "this month" = 30
+- "all future jobs" or "upcoming" or "apply to all" = 90
+- Use the specific number if they state one
+
+Rules:
+- The "client" field must match the client name as it appears in the schedule or knowledge base
+- The "note" field should be the exact note content they want added (clean it up slightly if needed)
+- If the client name is unclear or could match multiple clients, ask for clarification instead of outputting JSON
+- Do NOT output the JSON block for read-only questions about the schedule
+- Only output the JSON block when the admin explicitly asks to add/update a note on jobs` : '');
 
   try {
     // Get or create conversation history for this phone number
@@ -508,13 +538,57 @@ Always be warm, helpful, knowledgeable and professional. You ARE Lifestyle Home 
     const reply = claudeData.content?.[0]?.text ||
       "Hi! Thanks for your message. I'll get back to you shortly. For urgent matters please call 604-260-1925. — LHS 🏠";
 
-    // Add Aria's response to conversation history
-    addToConversation(from, 'assistant', reply);
+    // Check for admin action JSON prefix (bulk note dispatch)
+    let twimlReply = reply;
+
+    if (isAdmin && reply.startsWith('{"action":')) {
+      try {
+        const firstNewline = reply.indexOf('\n');
+        const jsonLine = reply.substring(0, firstNewline > 0 ? firstNewline : reply.length);
+        const parsed = JSON.parse(jsonLine);
+
+        if (parsed.action === 'bulk_note' && parsed.client && parsed.note) {
+          // Use the human-readable part for the TwiML response
+          twimlReply = firstNewline > 0
+            ? reply.substring(firstNewline + 1).trim()
+            : `On it! Adding notes to ${parsed.client} jobs. I'll text you when done. — LHS 🏠`;
+
+          // Fire and forget — dispatch to bulk-job-notes worker
+          const baseUrl = process.env.VERCEL_URL
+            ? `https://${process.env.VERCEL_URL}`
+            : 'https://lhs-scheduler-proxy.vercel.app';
+
+          console.log(`[BULK-NOTES] Dispatching: client="${parsed.client}", note="${parsed.note}", range=${parsed.range_days || 90} days`);
+
+          fetch(`${baseUrl}/api/bulk-job-notes`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${process.env.INTERNAL_SECRET}`
+            },
+            body: JSON.stringify({
+              clientName: parsed.client,
+              noteContent: parsed.note,
+              dateRangeStart: new Date().toISOString(),
+              dateRangeEnd: new Date(Date.now() + (parsed.range_days || 90) * 86400000).toISOString(),
+              adminPhone: from,
+              timestamp: new Date().toISOString()
+            })
+          }).catch(err => console.error('[BULK-NOTES] Dispatch failed:', err.message));
+        }
+      } catch (e) {
+        console.error('[BULK-NOTES] JSON parse failed, treating as normal reply:', e.message);
+        // twimlReply stays as the full reply — graceful degradation
+      }
+    }
+
+    // Add Aria's response to conversation history (clean version without JSON)
+    addToConversation(from, 'assistant', twimlReply);
 
     res.setHeader('Content-Type', 'text/xml');
     res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Message>${reply}</Message>
+  <Message>${twimlReply}</Message>
 </Response>`);
 
   } catch (err) {
