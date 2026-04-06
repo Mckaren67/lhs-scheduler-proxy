@@ -358,6 +358,14 @@ COMPANY INFO:
 ACTIVE TEAM:
 April W, Rebecca D, Genevieve O, Nicole D, Amber J, Kelly K, Julieta S, Alissa D, Emily F, Lacy Donald, Kristen K, Paula A, Lorissa W, Brandi M, Cathy W, Holly D, Margret W, Vanessa A, Danielle B, Terrie Lee Birston
 
+CLEANER AVAILABILITY RESTRICTIONS:
+- Brandi M: Available MORNINGS ONLY (until 2:30 PM) on Monday through Thursday. Unavailable all day Friday. NEVER schedule Brandi for afternoon jobs after 2:30 PM Mon–Thu.
+- Holly D: Unavailable Wednesday and Thursday
+- Danielle B: Unavailable Thursday
+- Paula A: Unavailable Friday
+- Vanessa A: Unavailable Thursday and Friday
+- Kristen K: Only available Saturday — unavailable all other days
+
 TIME OFF POLICY:
 - New employees: 10 vacation days, 5 paid sick days, 3 unpaid sick days
 - Submit requests through LHS Academy or by texting Aria
