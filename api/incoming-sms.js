@@ -43,7 +43,7 @@ async function fetchTodaysJobs() {
     const response = await fetch(`${baseUrl}/api/proxy?endpoint=${encodeURIComponent(endpoint)}`);
     const data = await response.json();
 
-    if (!data.jobs || data.jobs.length === 0) return 'No jobs scheduled for today.';
+    if (!data.jobs || data.jobs.length === 0) return { schedule: 'No jobs scheduled for today.', jobs: [] };
 
     const lines = data.jobs.map(job => {
       const name = `${job.customer?.first_name || ''} ${job.customer?.last_name || ''}`.trim() || 'Unknown';
@@ -63,11 +63,92 @@ async function fetchTodaysJobs() {
       return `• ${startTime}–${endTime} | ${name} | ${addr}, ${city} | ${desc} | Assigned: ${employees} | Status: ${status} | ${amount}`;
     });
 
-    return `${data.total_items} job(s) today:\n${lines.join('\n')}`;
+    return {
+      schedule: `${data.total_items} job(s) today:\n${lines.join('\n')}`,
+      jobs: data.jobs
+    };
   } catch (err) {
     console.error('HCP fetch error:', err);
-    return 'Schedule data temporarily unavailable.';
+    return { schedule: 'Schedule data temporarily unavailable.', jobs: [] };
   }
+}
+
+async function fetchClientPreferences() {
+  try {
+    const response = await fetch('https://lhs-knowledge-base.vercel.app/api/clients');
+    const data = await response.json();
+    return { clients: data.clients || [], cleaners: data.cleaners || [] };
+  } catch (err) {
+    console.error('Client prefs fetch error:', err);
+    return { clients: [], cleaners: [] };
+  }
+}
+
+function buildScheduleContext(hcpResult, clientData) {
+  const { schedule, jobs } = hcpResult;
+  const { clients, cleaners } = clientData;
+
+  // Build a lookup of client preferences by name (lowercase for matching)
+  const clientLookup = {};
+  for (const c of clients) {
+    clientLookup[c.name.toLowerCase()] = c;
+  }
+
+  // Merge: for each job today, find matching client preferences
+  let mergedNotes = '';
+  if (jobs.length > 0) {
+    const matched = [];
+    for (const job of jobs) {
+      const custName = `${job.customer?.first_name || ''} ${job.customer?.last_name || ''}`.trim();
+      if (!custName) continue;
+
+      // Try exact match, then partial match
+      let prefs = clientLookup[custName.toLowerCase()];
+      if (!prefs) {
+        const lastN = (job.customer?.last_name || '').toLowerCase();
+        prefs = clients.find(c => c.name.toLowerCase().includes(lastN) && lastN.length > 2);
+      }
+
+      if (prefs) {
+        const notes = [];
+        if (prefs.priority) notes.push(`Priority: ${prefs.priority}`);
+        if (prefs.preferred_cleaner) notes.push(`Preferred cleaner: ${prefs.preferred_cleaner}`);
+        if (prefs.preferred_day) notes.push(`Preferred day: ${prefs.preferred_day}`);
+        if (prefs.frequency) notes.push(`Frequency: ${prefs.frequency}`);
+        if (prefs.client_type) notes.push(`Type: ${prefs.client_type}`);
+        if (notes.length > 0) {
+          matched.push(`  ${prefs.name}: ${notes.join(' | ')}`);
+        }
+      }
+    }
+    if (matched.length > 0) {
+      mergedNotes = `\n\nCLIENT PREFERENCES FOR TODAY'S JOBS:\n${matched.join('\n')}`;
+    }
+  }
+
+  // Build cleaner availability summary
+  const dayName = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Vancouver', weekday: 'long' });
+  const availableToday = cleaners
+    .filter(c => c.days.includes(dayName))
+    .map(c => `${c.name} (${c.jobs} career jobs)`)
+    .join(', ');
+  const unavailableToday = cleaners
+    .filter(c => !c.days.includes(dayName))
+    .map(c => c.name)
+    .join(', ');
+
+  const cleanerSummary = `\n\nCLEANER AVAILABILITY TODAY (${dayName}):\nAvailable: ${availableToday || 'None'}\nNot scheduled: ${unavailableToday || 'None'}`;
+
+  // High-priority clients summary (always useful context)
+  const highPriority = clients
+    .filter(c => c.priority === 'High')
+    .map(c => `  ${c.name}: Preferred cleaner ${c.preferred_cleaner || 'not set'} | ${c.frequency} on ${c.preferred_day || 'flexible'}`)
+    .join('\n');
+  const highPrioritySummary = highPriority
+    ? `\n\nHIGH-PRIORITY CLIENTS (never miss, always assign preferred cleaner):\n${highPriority}`
+    : '';
+
+  return `${schedule}${mergedNotes}${cleanerSummary}${highPrioritySummary}`;
 }
 
 export default async function handler(req, res) {
@@ -81,8 +162,12 @@ export default async function handler(req, res) {
   const from = body.From || '';
   const incomingMessage = body.Body || '';
 
-  // Fetch live schedule from HouseCall Pro
-  const todaysSchedule = await fetchTodaysJobs();
+  // Fetch live schedule and client preferences in parallel
+  const [hcpResult, clientData] = await Promise.all([
+    fetchTodaysJobs(),
+    fetchClientPreferences()
+  ]);
+  const scheduleContext = buildScheduleContext(hcpResult, clientData);
 
   const ARIA_SYSTEM_PROMPT = `You are Aria, the intelligent AI assistant for Lifestyle Home Service (LHS), a professional residential and commercial cleaning company based in Chilliwack, BC, Canada.
 
@@ -202,10 +287,18 @@ You have access to real call transcripts and AI recaps from Dialpad via the sear
 - Isaac Reid: 773-904-9383 (US — long calls, likely business development)
 - Ladda Bouttavong (candidate): 778-539-3767
 
-TODAY'S LIVE SCHEDULE (from HouseCall Pro):
-${todaysSchedule}
+TODAY'S LIVE SCHEDULE & CLIENT INTELLIGENCE:
+${scheduleContext}
 
-When asked about today's schedule, jobs, assignments, or who is working where — use the live data above. Be specific with times, names, addresses and statuses. If a job is canceled, mention that. Convert times to Pacific time for the team.
+SCHEDULING RULES:
+- When asked about today's schedule, jobs, assignments, or who is working where — use the live data above
+- Be specific with times, names, addresses and statuses. If a job is canceled, mention that
+- Convert times to Pacific time for the team
+- High-priority clients must ALWAYS get their preferred cleaner when possible
+- If a preferred cleaner calls in sick or is unavailable, suggest the best available replacement from today's cleaner list and flag it for Karen's approval
+- When rescheduling, always try to keep the client's preferred day and time
+- Commercial clients have strict schedules — never reschedule without Karen's direct approval
+- If a cleaner is assigned to a client they're not preferred for, mention it proactively so Karen can review
 
 Always be warm, helpful, knowledgeable and professional. You ARE Lifestyle Home Service to everyone who contacts you.`;
 
