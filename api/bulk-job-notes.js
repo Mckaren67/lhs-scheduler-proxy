@@ -154,24 +154,26 @@ export default async function handler(req, res) {
     // 5. SMS each cleaner
     const notified = [];
     const notifyFailed = [];
-    const smsResults = await Promise.allSettled(
-      cleaners.map(cleaner => {
-        // Format phone as E.164 for Twilio
+    for (const cleaner of cleaners) {
+      try {
         const toPhone = cleaner.phone.startsWith('+') ? cleaner.phone :
           cleaner.phone.length === 10 ? `+1${cleaner.phone}` : `+${cleaner.phone}`;
 
-        return sendSMS(toPhone,
+        const result = await sendSMS(toPhone,
           `Hi ${cleaner.name.split(' ')[0]}, there's been an update to the job notes for ${clientName}. Please review before your next visit. — LHS 🏠`
-        ).then(result => {
-          if (result.sid) {
-            notified.push(cleaner.name);
-          } else {
-            notifyFailed.push(cleaner.name);
-          }
-          return result;
-        });
-      })
-    );
+        );
+        if (result.sid) {
+          notified.push(cleaner.name);
+          console.log(`[BULK-NOTES] SMS sent to ${cleaner.name} (${toPhone}): SID ${result.sid}`);
+        } else {
+          notifyFailed.push(cleaner.name);
+          console.error(`[BULK-NOTES] SMS failed for ${cleaner.name}:`, JSON.stringify(result));
+        }
+      } catch (err) {
+        notifyFailed.push(cleaner.name);
+        console.error(`[BULK-NOTES] SMS error for ${cleaner.name}:`, err.message);
+      }
+    }
 
     // 6. Confirm back to Karen
     if (adminPhone) {

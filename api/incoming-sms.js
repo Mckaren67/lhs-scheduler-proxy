@@ -541,17 +541,19 @@ Rules:
     // Check for admin action JSON prefix (bulk note dispatch)
     let twimlReply = reply;
 
-    if (isAdmin && reply.startsWith('{"action":')) {
+    if (isAdmin && reply.includes('{"action":')) {
       try {
-        const firstNewline = reply.indexOf('\n');
-        const jsonLine = reply.substring(0, firstNewline > 0 ? firstNewline : reply.length);
-        const parsed = JSON.parse(jsonLine);
+        // Extract the JSON object wherever it appears in the reply
+        const jsonStart = reply.indexOf('{"action":');
+        const jsonEnd = reply.indexOf('}', jsonStart) + 1;
+        const jsonStr = reply.substring(jsonStart, jsonEnd);
+        const parsed = JSON.parse(jsonStr);
 
         if (parsed.action === 'bulk_note' && parsed.client && parsed.note) {
-          // Use the human-readable part for the TwiML response
-          twimlReply = firstNewline > 0
-            ? reply.substring(firstNewline + 1).trim()
-            : `On it! Adding notes to ${parsed.client} jobs. I'll text you when done. — LHS 🏠`;
+          // Strip the JSON completely — Karen must never see it
+          const withoutJson = (reply.substring(0, jsonStart) + reply.substring(jsonEnd))
+            .replace(/^\s*\n+/, '').replace(/\n+\s*$/, '').trim();
+          twimlReply = withoutJson || `On it! Adding notes to ${parsed.client} jobs. I'll text you when done. — LHS 🏠`;
 
           // Fire and forget — dispatch to bulk-job-notes worker
           const baseUrl = process.env.VERCEL_URL
