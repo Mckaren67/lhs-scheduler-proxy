@@ -485,27 +485,7 @@ Always be warm, helpful, knowledgeable and professional. You ARE Lifestyle Home 
   + (isAdmin ? `
 
 ADMIN CAPABILITIES (you are texting with Karen or another admin):
-You can add notes to client jobs in HouseCall Pro. When asked to add a note to a client's jobs:
-
-1. Output a JSON action block on the VERY FIRST LINE of your response, followed by a newline:
-   {"action":"bulk_note","client":"Valley Toyota","note":"Use the back entrance starting next week","range_days":90}
-
-2. Then on the NEXT LINE, write your friendly confirmation message to Karen.
-
-range_days guide based on what the admin says:
-- "today's job" or "today" = 1
-- "this week" = 7
-- "next 2 weeks" = 14
-- "this month" = 30
-- "all future jobs" or "upcoming" or "apply to all" = 90
-- Use the specific number if they state one
-
-Rules:
-- The "client" field must match the client name as it appears in the schedule or knowledge base
-- The "note" field should be the exact note content they want added (clean it up slightly if needed)
-- If the client name is unclear or could match multiple clients, ask for clarification instead of outputting JSON
-- Do NOT output the JSON block for read-only questions about the schedule
-- Only output the JSON block when the admin explicitly asks to add/update a note on jobs` : '');
+You can add notes to client jobs in HouseCall Pro. When asked to add a note to a client's jobs, use the add_job_note tool. If the client name is unclear, ask for clarification first.` : '');
 
   try {
     // Get or create conversation history for this phone number
@@ -519,6 +499,29 @@ Rules:
       ? conv.messages 
       : [{ role: 'user', content: `Incoming SMS from ${from}: "${incomingMessage}"` }];
 
+    // Build tool definitions for admin users
+    const tools = isAdmin ? [{
+      name: 'add_job_note',
+      description: 'Add a note to a client\'s jobs in HouseCall Pro. Use when Karen asks to add a note, update instructions, or leave a message on a client\'s jobs.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          client: { type: 'string', description: 'Client name exactly as it appears in the schedule (e.g. "Hans Claus", "Valley Toyota")' },
+          note: { type: 'string', description: 'The note content to add to the job(s)' },
+          range_days: { type: 'number', description: 'How many days of jobs to update: 1 for today only, 7 for this week, 90 for all future jobs. Default 90.' }
+        },
+        required: ['client', 'note']
+      }
+    }] : [];
+
+    const claudeBody = {
+      model: 'claude-sonnet-4-5',
+      max_tokens: 400,
+      system: ARIA_SYSTEM_PROMPT,
+      messages: messages
+    };
+    if (tools.length > 0) claudeBody.tools = tools;
+
     const claudeResponse = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -526,65 +529,50 @@ Rules:
         'x-api-key': process.env.ANTHROPIC_API_KEY,
         'anthropic-version': '2023-06-01'
       },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-5',
-        max_tokens: 400,
-        system: ARIA_SYSTEM_PROMPT,
-        messages: messages
-      })
+      body: JSON.stringify(claudeBody)
     });
 
     const claudeData = await claudeResponse.json();
-    const reply = claudeData.content?.[0]?.text ||
-      "Hi! Thanks for your message. I'll get back to you shortly. For urgent matters please call 604-260-1925. — LHS 🏠";
 
-    // Check for admin action JSON prefix (bulk note dispatch)
-    let twimlReply = reply;
+    // Check if Claude used a tool (admin action)
+    const toolUse = claudeData.content?.find(b => b.type === 'tool_use');
+    const textBlock = claudeData.content?.find(b => b.type === 'text');
+    let twimlReply;
 
-    if (isAdmin && reply.includes('{"action":')) {
-      try {
-        // Extract the JSON object wherever it appears in the reply
-        const jsonStart = reply.indexOf('{"action":');
-        const jsonEnd = reply.indexOf('}', jsonStart) + 1;
-        const jsonStr = reply.substring(jsonStart, jsonEnd);
-        const parsed = JSON.parse(jsonStr);
+    if (toolUse && toolUse.name === 'add_job_note') {
+      const { client, note, range_days } = toolUse.input;
+      console.log(`[BULK-NOTES] Tool call: client="${client}", note="${note}", range=${range_days || 90} days`);
 
-        if (parsed.action === 'bulk_note' && parsed.client && parsed.note) {
-          // Strip the JSON completely — Karen must never see it
-          const withoutJson = (reply.substring(0, jsonStart) + reply.substring(jsonEnd))
-            .replace(/^\s*\n+/, '').replace(/\n+\s*$/, '').trim();
-          twimlReply = withoutJson || `On it! Adding notes to ${parsed.client} jobs. I'll text you when done. — LHS 🏠`;
+      // Karen's immediate reply — never contains JSON
+      twimlReply = textBlock?.text?.trim() || `On it! Adding "${note}" to ${client} jobs. I'll text you the confirmation shortly. — LHS 🏠`;
 
-          // Fire and forget — dispatch to bulk-job-notes worker
-          const baseUrl = process.env.VERCEL_URL
-            ? `https://${process.env.VERCEL_URL}`
-            : 'https://lhs-scheduler-proxy.vercel.app';
+      // Fire and forget — dispatch to bulk-job-notes worker
+      const baseUrl = process.env.VERCEL_URL
+        ? `https://${process.env.VERCEL_URL}`
+        : 'https://lhs-scheduler-proxy.vercel.app';
 
-          console.log(`[BULK-NOTES] Dispatching: client="${parsed.client}", note="${parsed.note}", range=${parsed.range_days || 90} days`);
-
-          fetch(`${baseUrl}/api/bulk-job-notes`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${process.env.INTERNAL_SECRET}`
-            },
-            body: JSON.stringify({
-              clientName: parsed.client,
-              noteContent: parsed.note,
-              dateRangeStart: new Date().toISOString(),
-              dateRangeEnd: new Date(Date.now() + (parsed.range_days || 90) * 86400000).toISOString(),
-              adminPhone: from,
-              timestamp: new Date().toISOString()
-            })
-          }).catch(err => console.error('[BULK-NOTES] Dispatch failed:', err.message));
-        }
-      } catch (e) {
-        console.error('[BULK-NOTES] JSON parse failed, treating as normal reply:', e.message);
-        // twimlReply stays as the full reply — graceful degradation
-      }
+      fetch(`${baseUrl}/api/bulk-job-notes`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.INTERNAL_SECRET}`
+        },
+        body: JSON.stringify({
+          clientName: client,
+          noteContent: note,
+          dateRangeStart: new Date().toISOString(),
+          dateRangeEnd: new Date(Date.now() + (range_days || 90) * 86400000).toISOString(),
+          adminPhone: from,
+          timestamp: new Date().toISOString()
+        })
+      }).catch(err => console.error('[BULK-NOTES] Dispatch failed:', err.message));
+    } else {
+      // Normal text response (no tool call)
+      twimlReply = textBlock?.text || claudeData.content?.[0]?.text ||
+        "Hi! Thanks for your message. I'll get back to you shortly. For urgent matters please call 604-260-1925. — LHS 🏠";
     }
 
-    // Add Aria's response to conversation history (clean version without JSON)
+    // Add Aria's response to conversation history
     addToConversation(from, 'assistant', twimlReply);
 
     res.setHeader('Content-Type', 'text/xml');
