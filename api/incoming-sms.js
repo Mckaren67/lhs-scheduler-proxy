@@ -29,20 +29,34 @@ function addToConversation(phone, role, content) {
   conv.lastActivity = Date.now();
 }
 
+async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    return response;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function fetchTodaysJobs() {
   try {
     const now = new Date();
     const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
     const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59).toISOString();
 
-    const baseUrl = process.env.VERCEL_URL
-      ? `https://${process.env.VERCEL_URL}`
-      : 'https://lhs-scheduler-proxy.vercel.app';
-
-    const endpoint = `jobs?scheduled_start_min=${startOfDay}&scheduled_start_max=${endOfDay}&page_size=200`;
-    const fetchUrl = `${baseUrl}/api/proxy?endpoint=${encodeURIComponent(endpoint)}`;
-    console.log('[HCP] Fetching:', fetchUrl);
-    const response = await fetch(fetchUrl);
+    // Call HouseCall Pro API directly (not through proxy) to avoid self-referential serverless call
+    const apiKey = process.env.HCP_API_KEY;
+    const fetchUrl = `https://api.housecallpro.com/jobs?scheduled_start_min=${startOfDay}&scheduled_start_max=${endOfDay}&page_size=200`;
+    console.log('[HCP] Fetching directly:', fetchUrl);
+    const response = await fetchWithTimeout(fetchUrl, {
+      headers: {
+        'Authorization': `Token ${apiKey}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      }
+    });
     console.log('[HCP] Response status:', response.status);
     if (!response.ok) {
       const errText = await response.text();
@@ -77,8 +91,9 @@ async function fetchTodaysJobs() {
       jobs: data.jobs
     };
   } catch (err) {
-    console.error('[HCP] Fetch exception:', err.message, err.stack);
-    return { schedule: 'Schedule data temporarily unavailable.', jobs: [] };
+    const reason = err.name === 'AbortError' ? 'Request timed out after 8s' : err.message;
+    console.error('[HCP] Fetch exception:', reason, err.stack);
+    return { schedule: `Schedule data temporarily unavailable (${reason}).`, jobs: [] };
   }
 }
 
@@ -86,7 +101,7 @@ async function fetchClientPreferences() {
   try {
     const clientsUrl = 'https://lhs-knowledge-base.vercel.app/api/clients';
     console.log('[CLIENTS] Fetching:', clientsUrl);
-    const response = await fetch(clientsUrl);
+    const response = await fetchWithTimeout(clientsUrl);
     console.log('[CLIENTS] Response status:', response.status);
     if (!response.ok) {
       const errText = await response.text();
@@ -97,7 +112,8 @@ async function fetchClientPreferences() {
     console.log('[CLIENTS] Loaded:', data.clients?.length ?? 0, 'clients,', data.cleaners?.length ?? 0, 'cleaners');
     return { clients: data.clients || [], cleaners: data.cleaners || [] };
   } catch (err) {
-    console.error('[CLIENTS] Fetch exception:', err.message, err.stack);
+    const reason = err.name === 'AbortError' ? 'Request timed out after 8s' : err.message;
+    console.error('[CLIENTS] Fetch exception:', reason, err.stack);
     return { clients: [], cleaners: [] };
   }
 }
