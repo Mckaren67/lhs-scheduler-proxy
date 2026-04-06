@@ -74,15 +74,35 @@ export default async function handler(req, res) {
     const jobsData = await jobsResponse.json();
     const allJobs = jobsData.jobs || [];
 
-    // 2. Filter by client name (case-insensitive partial match)
-    const searchLower = clientName.toLowerCase();
+    // 2. Filter by client name (strict matching — only exact name or clear first+last match)
+    const searchLower = clientName.toLowerCase().trim();
+    const searchParts = searchLower.split(/\s+/);
     const matchedJobs = allJobs.filter(job => {
-      const custName = `${job.customer?.first_name || ''} ${job.customer?.last_name || ''}`.trim().toLowerCase();
+      const firstName = (job.customer?.first_name || '').trim().toLowerCase();
+      const lastName = (job.customer?.last_name || '').trim().toLowerCase();
+      const fullName = `${firstName} ${lastName}`.trim();
+      if (!fullName) return false; // Never match empty customer names
       const isActive = job.work_status !== 'pro canceled' && !job.deleted_at;
-      return isActive && (custName.includes(searchLower) || searchLower.includes(custName));
+      if (!isActive) return false;
+
+      // Exact full name match
+      if (fullName === searchLower) return true;
+      // Search matches "firstName lastName" in either order
+      if (searchParts.length >= 2 && firstName && lastName) {
+        if (searchParts.includes(firstName) && searchParts.includes(lastName)) return true;
+      }
+      // Single-word search must match either first or last name exactly
+      if (searchParts.length === 1) {
+        if (firstName === searchLower || lastName === searchLower) return true;
+      }
+      return false;
     });
 
     console.log(`[BULK-NOTES] Found ${matchedJobs.length} matching jobs for "${clientName}" out of ${allJobs.length} total`);
+    for (const job of matchedJobs) {
+      const jName = `${job.customer?.first_name || ''} ${job.customer?.last_name || ''}`.trim();
+      console.log(`[BULK-NOTES]   Match: ${job.id} | "${jName}" | ${job.work_status} | ${job.schedule?.scheduled_start}`);
+    }
 
     if (matchedJobs.length === 0) {
       if (adminPhone) {
@@ -102,7 +122,11 @@ export default async function handler(req, res) {
             'Accept': 'application/json'
           },
           body: JSON.stringify({ content: formattedNote })
-        }).then(r => ({ jobId: job.id, status: r.status, ok: r.ok }))
+        }).then(async r => {
+          const body = await r.text();
+          console.log(`[BULK-NOTES]   Note POST ${job.id}: HTTP ${r.status} ${r.ok ? 'OK' : 'FAIL'} — ${body.substring(0, 200)}`);
+          return { jobId: job.id, status: r.status, ok: r.ok };
+        })
       )
     );
 
