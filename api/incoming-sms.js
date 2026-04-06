@@ -40,8 +40,17 @@ async function fetchTodaysJobs() {
       : 'https://lhs-scheduler-proxy.vercel.app';
 
     const endpoint = `jobs?scheduled_start_min=${startOfDay}&scheduled_start_max=${endOfDay}&page_size=200`;
-    const response = await fetch(`${baseUrl}/api/proxy?endpoint=${encodeURIComponent(endpoint)}`);
+    const fetchUrl = `${baseUrl}/api/proxy?endpoint=${encodeURIComponent(endpoint)}`;
+    console.log('[HCP] Fetching:', fetchUrl);
+    const response = await fetch(fetchUrl);
+    console.log('[HCP] Response status:', response.status);
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error('[HCP] Error response:', response.status, errText);
+      return { schedule: `Schedule fetch failed (HTTP ${response.status}).`, jobs: [] };
+    }
     const data = await response.json();
+    console.log('[HCP] Jobs returned:', data.jobs?.length ?? 0, 'Total:', data.total_items ?? 'unknown');
 
     if (!data.jobs || data.jobs.length === 0) return { schedule: 'No jobs scheduled for today.', jobs: [] };
 
@@ -68,18 +77,27 @@ async function fetchTodaysJobs() {
       jobs: data.jobs
     };
   } catch (err) {
-    console.error('HCP fetch error:', err);
+    console.error('[HCP] Fetch exception:', err.message, err.stack);
     return { schedule: 'Schedule data temporarily unavailable.', jobs: [] };
   }
 }
 
 async function fetchClientPreferences() {
   try {
-    const response = await fetch('https://lhs-knowledge-base.vercel.app/api/clients');
+    const clientsUrl = 'https://lhs-knowledge-base.vercel.app/api/clients';
+    console.log('[CLIENTS] Fetching:', clientsUrl);
+    const response = await fetch(clientsUrl);
+    console.log('[CLIENTS] Response status:', response.status);
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error('[CLIENTS] Error response:', response.status, errText);
+      return { clients: [], cleaners: [] };
+    }
     const data = await response.json();
+    console.log('[CLIENTS] Loaded:', data.clients?.length ?? 0, 'clients,', data.cleaners?.length ?? 0, 'cleaners');
     return { clients: data.clients || [], cleaners: data.cleaners || [] };
   } catch (err) {
-    console.error('Client prefs fetch error:', err);
+    console.error('[CLIENTS] Fetch exception:', err.message, err.stack);
     return { clients: [], cleaners: [] };
   }
 }
@@ -162,12 +180,15 @@ export default async function handler(req, res) {
   const from = body.From || '';
   const incomingMessage = body.Body || '';
 
+  console.log(`[ARIA] Incoming SMS from ${from}: "${incomingMessage}"`);
+
   // Fetch live schedule and client preferences in parallel
   const [hcpResult, clientData] = await Promise.all([
     fetchTodaysJobs(),
     fetchClientPreferences()
   ]);
   const scheduleContext = buildScheduleContext(hcpResult, clientData);
+  console.log(`[ARIA] Context built — HCP jobs: ${hcpResult.jobs.length}, KB clients: ${clientData.clients.length}, cleaners: ${clientData.cleaners.length}`);
 
   const ARIA_SYSTEM_PROMPT = `You are Aria, the intelligent AI assistant for Lifestyle Home Service (LHS), a professional residential and commercial cleaning company based in Chilliwack, BC, Canada.
 
