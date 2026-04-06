@@ -29,6 +29,47 @@ function addToConversation(phone, role, content) {
   conv.lastActivity = Date.now();
 }
 
+async function fetchTodaysJobs() {
+  try {
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+    const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59).toISOString();
+
+    const baseUrl = process.env.VERCEL_URL
+      ? `https://${process.env.VERCEL_URL}`
+      : 'https://lhs-scheduler-proxy.vercel.app';
+
+    const endpoint = `jobs?scheduled_start_min=${startOfDay}&scheduled_start_max=${endOfDay}&page_size=200`;
+    const response = await fetch(`${baseUrl}/api/proxy?endpoint=${encodeURIComponent(endpoint)}`);
+    const data = await response.json();
+
+    if (!data.jobs || data.jobs.length === 0) return 'No jobs scheduled for today.';
+
+    const lines = data.jobs.map(job => {
+      const name = `${job.customer?.first_name || ''} ${job.customer?.last_name || ''}`.trim() || 'Unknown';
+      const addr = job.address?.street || 'No address';
+      const city = job.address?.city || '';
+      const status = job.work_status || 'unknown';
+      const desc = job.description || 'No description';
+      const employees = (job.assigned_employees || []).map(e => `${e.first_name} ${e.last_name}`).join(', ') || 'Unassigned';
+
+      const start = job.schedule?.scheduled_start;
+      const end = job.schedule?.scheduled_end;
+      const startTime = start ? new Date(start).toLocaleTimeString('en-CA', { timeZone: 'America/Vancouver', hour: 'numeric', minute: '2-digit' }) : '?';
+      const endTime = end ? new Date(end).toLocaleTimeString('en-CA', { timeZone: 'America/Vancouver', hour: 'numeric', minute: '2-digit' }) : '?';
+
+      const amount = job.total_amount ? `$${(job.total_amount / 100).toFixed(2)}` : '';
+
+      return `• ${startTime}–${endTime} | ${name} | ${addr}, ${city} | ${desc} | Assigned: ${employees} | Status: ${status} | ${amount}`;
+    });
+
+    return `${data.total_items} job(s) today:\n${lines.join('\n')}`;
+  } catch (err) {
+    console.error('HCP fetch error:', err);
+    return 'Schedule data temporarily unavailable.';
+  }
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -39,6 +80,9 @@ export default async function handler(req, res) {
   const body = req.body || {};
   const from = body.From || '';
   const incomingMessage = body.Body || '';
+
+  // Fetch live schedule from HouseCall Pro
+  const todaysSchedule = await fetchTodaysJobs();
 
   const ARIA_SYSTEM_PROMPT = `You are Aria, the intelligent AI assistant for Lifestyle Home Service (LHS), a professional residential and commercial cleaning company based in Chilliwack, BC, Canada.
 
@@ -157,6 +201,11 @@ You have access to real call transcripts and AI recaps from Dialpad via the sear
 - Bill Gee: 778-984-2831
 - Isaac Reid: 773-904-9383 (US — long calls, likely business development)
 - Ladda Bouttavong (candidate): 778-539-3767
+
+TODAY'S LIVE SCHEDULE (from HouseCall Pro):
+${todaysSchedule}
+
+When asked about today's schedule, jobs, assignments, or who is working where — use the live data above. Be specific with times, names, addresses and statuses. If a job is canceled, mention that. Convert times to Pacific time for the team.
 
 Always be warm, helpful, knowledgeable and professional. You ARE Lifestyle Home Service to everyone who contacts you.`;
 
