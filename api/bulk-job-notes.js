@@ -152,9 +152,11 @@ export default async function handler(req, res) {
     // 6. Confirm back to Karen
     if (adminPhone) {
       const rangeDays = Math.round((new Date(end) - new Date(start)) / 86400000);
-      let confirmMsg = `Done! Added note to ${succeeded} ${clientName} job${succeeded !== 1 ? 's' : ''} (next ${rangeDays} days).`;
+      let confirmMsg = `Done! Added note to ${succeeded} ${clientName} job${succeeded !== 1 ? 's' : ''}.`;
       if (failed > 0) confirmMsg += ` ${failed} failed.`;
-      if (notified.length > 0) confirmMsg += ` Notified: ${notified.join(', ')}.`;
+      if (notified.length > 0) {
+        confirmMsg += ` ${notified.join(' and ')} ${notified.length === 1 ? 'has' : 'have'} been notified.`;
+      }
       if (notifyFailed.length > 0) confirmMsg += ` Could not reach: ${notifyFailed.join(', ')}.`;
       confirmMsg += ' — LHS 🏠';
 
