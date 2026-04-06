@@ -40,76 +40,108 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
   }
 }
 
-async function fetchHCPJobs(startDate, endDate, label) {
-  const apiKey = process.env.HCP_API_KEY;
-  const fetchUrl = `https://api.housecallpro.com/jobs?scheduled_start_min=${startDate}&scheduled_start_max=${endDate}&page_size=200`;
-  console.log(`[HCP-${label}] Fetching:`, fetchUrl);
-  const response = await fetchWithTimeout(fetchUrl, {
-    headers: {
-      'Authorization': `Token ${apiKey}`,
-      'Content-Type': 'application/json',
-      'Accept': 'application/json'
+// --- Cached pattern analysis (refreshes every 2 hours, runs in background) ---
+const PATTERN_CACHE_TTL = 2 * 60 * 60 * 1000; // 2 hours
+let cachedPatterns = { data: '', fetchedAt: 0 };
+let patternFetchInProgress = false;
+
+async function refreshPatternCache() {
+  if (patternFetchInProgress) return;
+  patternFetchInProgress = true;
+  try {
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+    const thirtyDaysOut = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 30, 23, 59, 59).toISOString();
+
+    const apiKey = process.env.HCP_API_KEY;
+    const fetchUrl = `https://api.housecallpro.com/jobs?scheduled_start_min=${startOfDay}&scheduled_start_max=${thirtyDaysOut}&page_size=200`;
+    console.log('[PATTERNS] Refreshing 30-day cache...');
+    const response = await fetchWithTimeout(fetchUrl, {
+      headers: {
+        'Authorization': `Token ${apiKey}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      }
+    }, 15000); // 15s timeout for this larger fetch
+
+    if (response.ok) {
+      const data = await response.json();
+      const patterns = analyzeRecurringPatterns(data.jobs || []);
+      cachedPatterns = { data: patterns, fetchedAt: Date.now() };
+      console.log(`[PATTERNS] Cache refreshed — ${(data.jobs || []).length} jobs analyzed`);
+    } else {
+      console.error('[PATTERNS] Refresh failed:', response.status);
     }
-  }, 10000);
-  console.log(`[HCP-${label}] Response status:`, response.status);
-  if (!response.ok) {
-    const errText = await response.text();
-    console.error(`[HCP-${label}] Error:`, response.status, errText);
-    return [];
+  } catch (err) {
+    console.error('[PATTERNS] Refresh exception:', err.message);
+  } finally {
+    patternFetchInProgress = false;
   }
-  const data = await response.json();
-  console.log(`[HCP-${label}] Jobs returned:`, data.jobs?.length ?? 0);
-  return data.jobs || [];
 }
 
-async function fetchHCPSchedule() {
+function getCachedPatterns() {
+  const age = Date.now() - cachedPatterns.fetchedAt;
+  if (age > PATTERN_CACHE_TTL) {
+    // Trigger background refresh — don't block the current request
+    refreshPatternCache();
+  }
+  return cachedPatterns.data;
+}
+// --- End pattern cache ---
+
+async function fetchTodaysJobs() {
   try {
     const now = new Date();
     const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
     const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59).toISOString();
-    const thirtyDaysOut = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 30, 23, 59, 59).toISOString();
 
-    // Fetch today's jobs and next 30 days in parallel
-    const [todayJobs, futureJobs] = await Promise.all([
-      fetchHCPJobs(startOfDay, endOfDay, 'TODAY'),
-      fetchHCPJobs(startOfDay, thirtyDaysOut, 'MONTH')
-    ]);
-
-    // Build today's schedule text
-    let scheduleText = 'No jobs scheduled for today.';
-    if (todayJobs.length > 0) {
-      const lines = todayJobs.map(job => {
-        const name = `${job.customer?.first_name || ''} ${job.customer?.last_name || ''}`.trim() || 'Unknown';
-        const addr = job.address?.street || 'No address';
-        const city = job.address?.city || '';
-        const status = job.work_status || 'unknown';
-        const desc = job.description || 'No description';
-        const employees = (job.assigned_employees || []).map(e => `${e.first_name} ${e.last_name}`).join(', ') || 'Unassigned';
-
-        const start = job.schedule?.scheduled_start;
-        const end = job.schedule?.scheduled_end;
-        const startTime = start ? new Date(start).toLocaleTimeString('en-CA', { timeZone: 'America/Vancouver', hour: 'numeric', minute: '2-digit' }) : '?';
-        const endTime = end ? new Date(end).toLocaleTimeString('en-CA', { timeZone: 'America/Vancouver', hour: 'numeric', minute: '2-digit' }) : '?';
-
-        const amount = job.total_amount ? `$${(job.total_amount / 100).toFixed(2)}` : '';
-
-        return `• ${startTime}–${endTime} | ${name} | ${addr}, ${city} | ${desc} | Assigned: ${employees} | Status: ${status} | ${amount}`;
-      });
-      scheduleText = `${todayJobs.length} job(s) today:\n${lines.join('\n')}`;
+    const apiKey = process.env.HCP_API_KEY;
+    const fetchUrl = `https://api.housecallpro.com/jobs?scheduled_start_min=${startOfDay}&scheduled_start_max=${endOfDay}&page_size=200`;
+    console.log('[HCP] Fetching today:', fetchUrl);
+    const response = await fetchWithTimeout(fetchUrl, {
+      headers: {
+        'Authorization': `Token ${apiKey}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      }
+    });
+    console.log('[HCP] Response status:', response.status);
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error('[HCP] Error response:', response.status, errText);
+      return { schedule: `Schedule fetch failed (HTTP ${response.status}).`, jobs: [] };
     }
+    const data = await response.json();
+    console.log('[HCP] Jobs returned:', data.jobs?.length ?? 0);
 
-    // Analyze recurring patterns from the 30-day window
-    const patterns = analyzeRecurringPatterns(futureJobs);
+    if (!data.jobs || data.jobs.length === 0) return { schedule: 'No jobs scheduled for today.', jobs: [] };
+
+    const lines = data.jobs.map(job => {
+      const name = `${job.customer?.first_name || ''} ${job.customer?.last_name || ''}`.trim() || 'Unknown';
+      const addr = job.address?.street || 'No address';
+      const city = job.address?.city || '';
+      const status = job.work_status || 'unknown';
+      const desc = job.description || 'No description';
+      const employees = (job.assigned_employees || []).map(e => `${e.first_name} ${e.last_name}`).join(', ') || 'Unassigned';
+
+      const start = job.schedule?.scheduled_start;
+      const end = job.schedule?.scheduled_end;
+      const startTime = start ? new Date(start).toLocaleTimeString('en-CA', { timeZone: 'America/Vancouver', hour: 'numeric', minute: '2-digit' }) : '?';
+      const endTime = end ? new Date(end).toLocaleTimeString('en-CA', { timeZone: 'America/Vancouver', hour: 'numeric', minute: '2-digit' }) : '?';
+
+      const amount = job.total_amount ? `$${(job.total_amount / 100).toFixed(2)}` : '';
+
+      return `• ${startTime}–${endTime} | ${name} | ${addr}, ${city} | ${desc} | Assigned: ${employees} | Status: ${status} | ${amount}`;
+    });
 
     return {
-      schedule: scheduleText,
-      jobs: todayJobs,
-      patterns: patterns
+      schedule: `${data.total_items} job(s) today:\n${lines.join('\n')}`,
+      jobs: data.jobs
     };
   } catch (err) {
     const reason = err.name === 'AbortError' ? 'Request timed out after 8s' : err.message;
     console.error('[HCP] Fetch exception:', reason, err.stack);
-    return { schedule: `Schedule data temporarily unavailable (${reason}).`, jobs: [], patterns: '' };
+    return { schedule: `Schedule data temporarily unavailable (${reason}).`, jobs: [] };
   }
 }
 
@@ -288,13 +320,15 @@ export default async function handler(req, res) {
 
   console.log(`[ARIA] Incoming SMS from ${from}: "${incomingMessage}"`);
 
-  // Fetch live schedule (today + 30-day patterns) and client preferences in parallel
+  // Fetch today's jobs and client preferences in parallel (patterns come from cache)
   const [hcpResult, clientData] = await Promise.all([
-    fetchHCPSchedule(),
+    fetchTodaysJobs(),
     fetchClientPreferences()
   ]);
-  const scheduleContext = buildScheduleContext(hcpResult, clientData);
-  console.log(`[ARIA] Context built — HCP today: ${hcpResult.jobs.length}, KB clients: ${clientData.clients.length}, cleaners: ${clientData.cleaners.length}`);
+  // Get cached patterns (triggers background refresh if stale — never blocks)
+  const patterns = getCachedPatterns();
+  const scheduleContext = buildScheduleContext({ ...hcpResult, patterns }, clientData);
+  console.log(`[ARIA] Context built — HCP today: ${hcpResult.jobs.length}, KB clients: ${clientData.clients.length}, patterns cached: ${patterns ? 'yes' : 'no'}`);
 
   const ARIA_SYSTEM_PROMPT = `You are Aria, the intelligent AI assistant for Lifestyle Home Service (LHS), a professional residential and commercial cleaning company based in Chilliwack, BC, Canada.
 
