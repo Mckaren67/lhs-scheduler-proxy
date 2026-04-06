@@ -137,7 +137,7 @@ export default async function handler(req, res) {
           cleaner.phone.length === 10 ? `+1${cleaner.phone}` : `+${cleaner.phone}`;
 
         return sendSMS(toPhone,
-          `Hi ${cleaner.name.split(' ')[0]}! Update from Aria for ${clientName}: "${noteContent}" This applies to your upcoming jobs. Questions? Text back or call Karen at 604-260-1925. — LHS 🏠`
+          `Hi ${cleaner.name.split(' ')[0]}, there's been an update to the job notes for ${clientName}. Please review before your next visit. — LHS 🏠`
         ).then(result => {
           if (result.sid) {
             notified.push(cleaner.name);
