@@ -2,6 +2,7 @@ export const config = { api: { bodyParser: true }, maxDuration: 60 };
 import { executeBulkNotes } from './bulk-job-notes.js';
 import { saveTask, completeTask, searchTasks, getOpenTasks, getOverdueTasks } from './task-store.js';
 import { getCapacityData } from './capacity-check.js';
+import { saveConversation, saveLearning, buildCallerContext } from './aria-memory.js';
 
 async function sendSMSNotification(to, message) {
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
@@ -356,7 +357,16 @@ export default async function handler(req, res) {
   // Get cached patterns (triggers background refresh if stale — never blocks)
   const patterns = getCachedPatterns();
   const scheduleContext = buildScheduleContext({ ...hcpResult, patterns }, clientData);
-  console.log(`[ARIA] Context built — HCP today: ${hcpResult.jobs.length}, KB clients: ${clientData.clients.length}, patterns cached: ${patterns ? 'yes' : 'no'}`);
+
+  // Load caller memory context (non-blocking — if it fails, we proceed without it)
+  let callerContext = '';
+  try {
+    callerContext = await buildCallerContext(from);
+  } catch (err) {
+    console.error('[ARIA] Memory context failed:', err.message);
+  }
+
+  console.log(`[ARIA] Context built — HCP today: ${hcpResult.jobs.length}, KB clients: ${clientData.clients.length}, patterns cached: ${patterns ? 'yes' : 'no'}, memory: ${callerContext ? 'yes' : 'no'}`);
 
   const ARIA_SYSTEM_PROMPT = `You are Aria, the intelligent AI assistant for Lifestyle Home Service (LHS), a professional residential and commercial cleaning company based in Chilliwack, BC, Canada.
 
@@ -507,7 +517,7 @@ You have access to real call transcripts and AI recaps from Dialpad via the sear
 - Isaac Reid: 773-904-9383 (US — long calls, likely business development)
 - Ladda Bouttavong (candidate): 778-539-3767
 
-TODAY'S LIVE SCHEDULE & CLIENT INTELLIGENCE:
+${callerContext ? `ARIA'S MEMORY — WHAT YOU KNOW ABOUT THIS CALLER:\n${callerContext}\nUse this to personalize your response. Reference previous conversations naturally.\n\n` : ''}TODAY'S LIVE SCHEDULE & CLIENT INTELLIGENCE:
 ${scheduleContext}
 
 SCHEDULING RULES:
@@ -583,6 +593,12 @@ approve_stat_holiday_plan: Use when Karen says "approve the plan", "go ahead and
   "go ahead and reschedule the flexible ones" → approve_stat_holiday_plan
   This will: update flexible jobs in HCP, SMS each affected client, SMS each assigned cleaner, and confirm to Karen.
   ONLY use after Karen has seen and explicitly approved a rescheduling plan. Never auto-execute.
+
+save_learning: Use PROACTIVELY when you discover new information during a conversation. Examples:
+  Karen says "Hans Claus changed his day to Wednesdays" → save_learning about Hans Claus
+  Karen says "Holly can't do heavy lifting anymore" → save_learning about Holly
+  Karen says "Valley Toyota wants biweekly instead of weekly" → save_learning about Valley Toyota
+  You don't need to ask permission — just save it and confirm: "Noted! I'll remember that Hans Claus switched to Wednesdays."
 
 check_capacity: Use when Karen asks about capacity, staffing levels, workload, or whether to hire. Examples:
   "what's our capacity?" → check_capacity
@@ -705,6 +721,18 @@ CATEGORY ASSIGNMENT — choose the most specific match:
         type: 'object',
         properties: {},
         required: []
+      }
+    }, {
+      name: 'save_learning',
+      description: 'Save something new Aria learned about a client, cleaner, or the business. Use proactively when you discover new information during a conversation — client changed their preferred day, cleaner has a health issue, pricing changed, etc.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          subject: { type: 'string', description: 'Who or what this is about (e.g. "Hans Claus", "Holly D", "Valley Toyota pricing")' },
+          category: { type: 'string', enum: ['client', 'cleaner', 'scheduling', 'pricing', 'quality', 'general'], description: 'Category of the learning' },
+          fact: { type: 'string', description: 'The new fact or information learned' }
+        },
+        required: ['subject', 'category', 'fact']
       }
     }] : [];
 
@@ -1059,6 +1087,23 @@ CATEGORY ASSIGNMENT — choose the most specific match:
         twimlReply = `Sorry, I couldn't pull the capacity data right now. Please try again! — LHS 🏠`;
       }
 
+    } else if (toolUse && toolUse.name === 'save_learning') {
+      const { subject, category, fact } = toolUse.input;
+      console.log(`[MEMORY] Learning tool: ${subject} — ${fact.substring(0, 60)}`);
+
+      try {
+        await saveLearning({
+          subject,
+          category: category || 'general',
+          fact,
+          source: 'sms_conversation'
+        });
+        twimlReply = `Noted! I'll remember that about ${subject}. — LHS 🏠`;
+      } catch (err) {
+        console.error('[MEMORY] Save learning failed:', err.message);
+        twimlReply = `Got it, though I had trouble saving that note. I'll keep it in mind for this conversation. — LHS 🏠`;
+      }
+
     } else {
       // Normal text response (no tool call)
       twimlReply = textBlock?.text || claudeData.content?.[0]?.text ||
@@ -1073,6 +1118,16 @@ CATEGORY ASSIGNMENT — choose the most specific match:
 <Response>
   <Message>${twimlReply}</Message>
 </Response>`);
+
+    // Save conversation summary to memory (non-blocking — don't delay response)
+    saveConversation({
+      phone: from,
+      contactName: isAdmin ? 'Karen McLaren' : from,
+      channel: 'sms',
+      summary: incomingMessage.substring(0, 200),
+      actionTaken: toolUse ? `Used ${toolUse.name} tool` : null,
+      outcome: twimlReply.substring(0, 150)
+    }).catch(err => console.error('[MEMORY] Conversation save failed:', err.message));
 
   } catch (err) {
     console.error('Aria error:', err);
