@@ -537,12 +537,20 @@ PRIORITY ASSIGNMENT: When saving tasks, assess priority:
   medium = routine follow-ups, scheduling changes, training check-ins
   low = supply orders, administrative tasks, nice-to-haves
 
-CATEGORY ASSIGNMENT:
-  client = anything about a specific client
-  staff = anything about an employee
-  scheduling = schedule changes, block-offs, availability
-  billing = payments, invoices, pricing
-  admin = supplies, training setup, general business` : '');
+CATEGORY ASSIGNMENT — choose the most specific match:
+  scheduling = schedule changes, block-offs, availability, rescheduling
+  client_followup = follow-ups with specific clients, client requests, client complaints
+  cleaner_followup = follow-ups with specific cleaners, performance check-ins
+  stat_holiday = statutory holiday schedule reviews, holiday pay
+  new_client_onboarding = new client setup, intake, first clean scheduling
+  quality_control = quality inspections, cleaning issues, missed items, client complaints about cleaning
+  accounts_receivable = unpaid invoices, e-transfer follow-ups, outstanding balances, "owes", collections. Keywords: "pay", "invoice", "etransfer", "outstanding", "owes", "balance"
+  accounts_payable = paying cleaners, supplier invoices, expenses, reimbursements. Keywords: "pay cleaner", "supplier", "expense", "reimburse"
+  hiring = candidate follow-ups, interviews, onboarding new hires, probation reviews. Keywords: "interview", "candidate", "hire", "onboard", "probation", "applicant"
+  payroll_invoicing = payroll calculations, timesheet reviews, invoice generation
+  supply_ordering = supply orders, equipment, restocking. Keywords: "order", "supplies", "brooms", "dusters"
+  staff_management = training progress, team issues, employee records, policy changes
+  administrative = general business tasks, anything that doesn't fit above` : '');
 
   try {
     // Get or create conversation history for this phone number
@@ -577,7 +585,7 @@ CATEGORY ASSIGNMENT:
         properties: {
           description: { type: 'string', description: 'Clear description of the task (e.g. "Follow up with Ladda about interview")' },
           priority: { type: 'string', enum: ['high', 'medium', 'low'], description: 'Task priority' },
-          category: { type: 'string', enum: ['client', 'staff', 'admin', 'billing', 'scheduling'], description: 'Task category' },
+          category: { type: 'string', enum: ['scheduling', 'client_followup', 'cleaner_followup', 'stat_holiday', 'new_client_onboarding', 'quality_control', 'accounts_receivable', 'accounts_payable', 'hiring', 'payroll_invoicing', 'supply_ordering', 'staff_management', 'administrative'], description: 'Task category' },
           due_date: { type: 'string', description: `Due date in YYYY-MM-DD format, or null if no specific date. TODAY is ${new Date().toLocaleDateString('en-CA', { timeZone: 'America/Vancouver' })}. Calculate relative dates from today (e.g. "Thursday" means the next upcoming Thursday from today).` },
           assigned_to: { type: 'string', enum: ['karen', 'aria'], description: 'Who handles this. Default karen.' },
           estimated_time_minutes: { type: 'number', description: 'Estimated minutes to complete' },

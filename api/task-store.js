@@ -72,7 +72,12 @@ function persistTasks() {
 // ─── Priority sorting ───────────────────────────────────────────────────────
 
 const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 };
-const CATEGORY_ORDER = { client: 0, staff: 1, scheduling: 2, billing: 3, admin: 4 };
+const CATEGORY_ORDER = {
+  scheduling: 0, client_followup: 1, cleaner_followup: 2, stat_holiday: 3,
+  new_client_onboarding: 4, quality_control: 5, accounts_receivable: 6,
+  accounts_payable: 7, hiring: 8, payroll_invoicing: 9, supply_ordering: 10,
+  staff_management: 11, administrative: 12
+};
 
 function sortByPriority(taskList) {
   const today = todayPT();
@@ -88,8 +93,8 @@ function sortByPriority(taskList) {
     if (aPri !== bPri) return aPri - bPri;
 
     // Category
-    const aCat = CATEGORY_ORDER[a.category] ?? 4;
-    const bCat = CATEGORY_ORDER[b.category] ?? 4;
+    const aCat = CATEGORY_ORDER[a.category] ?? 12;
+    const bCat = CATEGORY_ORDER[b.category] ?? 12;
     if (aCat !== bCat) return aCat - bCat;
 
     // Due date (earliest first, no-date last)
