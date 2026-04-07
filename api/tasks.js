@@ -1,6 +1,6 @@
 export const config = { api: { bodyParser: true } };
 
-import { saveTask, completeTask, updateTask, getOpenTasks, searchTasks } from './task-store.js';
+import { saveTask, completeTask, updateTask, getOpenTasks, searchTasks, forceHydrate } from './task-store.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -17,8 +17,9 @@ export default async function handler(req, res) {
   }
 
   try {
-    // GET — list or search tasks
+    // GET — always re-read from KB for fresh data
     if (req.method === 'GET') {
+      await forceHydrate();
       const { search, status, due } = req.query;
 
       if (search) {

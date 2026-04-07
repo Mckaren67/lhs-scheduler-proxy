@@ -37,6 +37,7 @@ async function hydrateTasks() {
       console.log('[TASKS] Hydrating from knowledge base...');
       const res = await fetch(`${KB_SAVE_URL}?key=${KB_KEY}`);
       const data = await res.json();
+      tasks.clear();
       if (data.value && Array.isArray(data.value)) {
         for (const t of data.value) {
           tasks.set(t.id, t);
@@ -53,6 +54,12 @@ async function hydrateTasks() {
   })();
 
   return hydratePromise;
+}
+
+// Force re-read from KB — used by tasks API to always serve fresh data
+export async function forceHydrate() {
+  hydrated = false;
+  await hydrateTasks();
 }
 
 async function persistTasks() {
