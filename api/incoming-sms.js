@@ -1,6 +1,7 @@
 export const config = { api: { bodyParser: true }, maxDuration: 60 };
 import { executeBulkNotes } from './bulk-job-notes.js';
 import { saveTask, completeTask, searchTasks, getOpenTasks, getOverdueTasks } from './task-store.js';
+import { getCapacityData } from './capacity-check.js';
 
 async function sendSMSNotification(to, message) {
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
@@ -583,6 +584,12 @@ approve_stat_holiday_plan: Use when Karen says "approve the plan", "go ahead and
   This will: update flexible jobs in HCP, SMS each affected client, SMS each assigned cleaner, and confirm to Karen.
   ONLY use after Karen has seen and explicitly approved a rescheduling plan. Never auto-execute.
 
+check_capacity: Use when Karen asks about capacity, staffing levels, workload, or whether to hire. Examples:
+  "what's our capacity?" → check_capacity
+  "how busy are we?" → check_capacity
+  "do we need to hire?" → check_capacity
+  Returns current week capacity %, trend vs last week, and projection.
+
 TONE: Be warm, encouraging, and personal. Karen is shifting from a paper notebook to digital — make her feel supported:
   "You're doing great, Karen — I've got this covered for you!"
   "That's 5 tasks done today! You're crushing it! 🎉"
@@ -690,6 +697,14 @@ CATEGORY ASSIGNMENT — choose the most specific match:
           holiday_name: { type: 'string', description: 'Name of the holiday' }
         },
         required: ['holiday_date', 'holiday_name']
+      }
+    }, {
+      name: 'check_capacity',
+      description: 'Check workforce capacity. Use when Karen asks "what is our capacity?", "how busy are we?", "do we need to hire?", or anything about staffing levels, workload, or capacity.',
+      input_schema: {
+        type: 'object',
+        properties: {},
+        required: []
       }
     }] : [];
 
@@ -1015,6 +1030,33 @@ CATEGORY ASSIGNMENT — choose the most specific match:
       } catch (err) {
         console.error('[STAT-APPROVE] Error:', err.message);
         twimlReply = `Sorry, something went wrong executing the rescheduling plan. Please try again! — LHS 🏠`;
+      }
+
+    } else if (toolUse && toolUse.name === 'check_capacity') {
+      console.log('[CAPACITY] Checking capacity via SMS tool');
+
+      try {
+        const cap = await getCapacityData();
+        const trendStr = cap.trend > 0 ? `📈 up ${cap.trend}%` : cap.trend < 0 ? `📉 down ${Math.abs(cap.trend)}%` : '➡️ flat';
+
+        let msg = `📊 Workforce Capacity: ${cap.capacity}%\n\n`;
+        msg += `${cap.bookedHours}h booked / ${cap.availableHours}h available this week\n`;
+        msg += `${cap.jobCount} jobs across ${cap.cleanerCount} active cleaners\n`;
+        msg += `Trend: ${trendStr} from last week\n`;
+        if (cap.weeksUntilFull) {
+          msg += `At this pace, full capacity in ~${cap.weeksUntilFull} week${cap.weeksUntilFull !== 1 ? 's' : ''}\n`;
+        }
+
+        if (cap.capacity >= 90) msg += `\n🔴 Critical — hiring needed immediately!`;
+        else if (cap.capacity >= 80) msg += `\n🟠 Time to start the hiring process.`;
+        else if (cap.capacity >= 70) msg += `\n🟡 Keep an eye on it — hiring soon.`;
+        else msg += `\n💚 Healthy — room to grow!`;
+        msg += ` — LHS 🏠`;
+
+        twimlReply = msg;
+      } catch (err) {
+        console.error('[CAPACITY] Check failed:', err.message);
+        twimlReply = `Sorry, I couldn't pull the capacity data right now. Please try again! — LHS 🏠`;
       }
 
     } else {

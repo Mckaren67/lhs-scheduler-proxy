@@ -1,6 +1,7 @@
 export const config = { api: { bodyParser: false }, maxDuration: 30 };
 
 import { getMorningBriefingData } from './task-store.js';
+import { getCapacityData } from './capacity-check.js';
 
 const KAREN_PHONE = '+16048009630';
 
@@ -91,6 +92,20 @@ export default async function handler(req, res) {
       const mins = briefing.estimatedMinutesSaved % 60;
       const timeStr = hrs > 0 ? `~${hrs}h ${mins}m` : `~${mins} min`;
       msg += `Estimated time saved: ${timeStr} ⏱️\n`;
+    }
+
+    // On Mondays, add capacity stats
+    if (dayName === 'Monday') {
+      try {
+        const cap = await getCapacityData();
+        const trendStr = cap.trend > 0 ? `up ${cap.trend}%` : cap.trend < 0 ? `down ${Math.abs(cap.trend)}%` : 'flat';
+        msg += `\n📊 Workforce: ${cap.capacity}% capacity (${trendStr} from last week)\n`;
+        if (cap.weeksUntilFull) {
+          msg += `~${cap.weeksUntilFull} week${cap.weeksUntilFull !== 1 ? 's' : ''} to full capacity at current pace\n`;
+        }
+      } catch (err) {
+        console.error('[MORNING] Capacity check error:', err.message);
+      }
     }
 
     msg += `\nHave a great day! — Aria 🏠`;
