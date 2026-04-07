@@ -16,35 +16,60 @@ async function fetchTodaySchedule() {
     const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
     const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59).toISOString();
 
-    const response = await fetch(
-      `https://api.housecallpro.com/jobs?scheduled_start_min=${start}&scheduled_start_max=${end}&page_size=200`,
-      { headers: { 'Authorization': `Token ${apiKey}`, 'Accept': 'application/json' } }
-    );
-    if (!response.ok) return { text: 'Could not fetch schedule right now.', jobs: [] };
-    const data = await response.json();
-    const jobs = (data.jobs || []).filter(j => j.work_status !== 'pro canceled' && !j.deleted_at);
+    // Fetch HCP jobs and KB client prefs in parallel
+    const [jobsResp, clientsResp] = await Promise.all([
+      fetch(`https://api.housecallpro.com/jobs?scheduled_start_min=${start}&scheduled_start_max=${end}&page_size=200`,
+        { headers: { 'Authorization': `Token ${apiKey}`, 'Accept': 'application/json' } }),
+      fetch('https://lhs-knowledge-base.vercel.app/api/clients').catch(() => null)
+    ]);
+
+    if (!jobsResp.ok) return { text: 'Could not fetch the schedule right now.', jobs: [] };
+    const jobsData = await jobsResp.json();
+    const jobs = (jobsData.jobs || []).filter(j => j.work_status !== 'pro canceled' && !j.deleted_at);
+
+    // Build client preference lookup
+    const clientLookup = {};
+    if (clientsResp?.ok) {
+      const clientsData = await clientsResp.json();
+      for (const c of (clientsData.clients || [])) {
+        clientLookup[c.name.toLowerCase()] = c;
+      }
+    }
 
     if (jobs.length === 0) return { text: 'No jobs scheduled today.', jobs: [] };
 
-    // Build conversational summary
     const inProgress = jobs.filter(j => j.work_status === 'in progress' || j.work_timestamps?.started_at);
     const scheduled = jobs.filter(j => j.work_status === 'scheduled' && !j.work_timestamps?.started_at);
     const completed = jobs.filter(j => j.work_status === 'complete' || j.work_status === 'complete unrated');
 
     let text = `There are ${jobs.length} jobs today. `;
-    if (inProgress.length > 0) text += `${inProgress.length} in progress right now. `;
-    if (scheduled.length > 0) text += `${scheduled.length} still scheduled. `;
-    if (completed.length > 0) text += `${completed.length} already completed. `;
+    if (inProgress.length > 0) text += `${inProgress.length} in progress. `;
+    if (scheduled.length > 0) text += `${scheduled.length} still to go. `;
+    if (completed.length > 0) text += `${completed.length} completed. `;
 
-    text += '\n\nHere are the details:\n';
+    text += '\n\nJob details:\n';
     for (const job of jobs) {
       const name = `${job.customer?.first_name || ''} ${job.customer?.last_name || ''}`.trim();
       const employees = (job.assigned_employees || []).map(e => `${e.first_name}`).join(' and ') || 'unassigned';
       const startTime = job.schedule?.scheduled_start
         ? new Date(job.schedule.scheduled_start).toLocaleTimeString('en-CA', { timeZone: TIMEZONE, hour: 'numeric', minute: '2-digit' })
         : 'no time set';
+      const addr = job.address?.street || '';
+      const city = job.address?.city || '';
       const status = job.work_status || 'scheduled';
-      text += `${name} at ${startTime}, ${employees}, ${status}. `;
+
+      // Enrich with client preferences
+      const prefs = clientLookup[name.toLowerCase()];
+      let prefNote = '';
+      if (prefs) {
+        if (prefs.priority === 'High') prefNote += ' High priority client.';
+        if (prefs.preferred_cleaner && !employees.toLowerCase().includes(prefs.preferred_cleaner.split(' ')[0].toLowerCase())) {
+          prefNote += ` Note: preferred cleaner is ${prefs.preferred_cleaner}.`;
+        }
+        if (prefs.client_type === 'Commercial') prefNote += ' Commercial account.';
+      }
+
+      text += `${name}, ${addr}${city ? ' in ' + city : ''}, at ${startTime}, assigned to ${employees}, ${status}.${prefNote} `;
     }
 
     return { text, jobs };

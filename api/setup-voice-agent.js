@@ -99,7 +99,54 @@ TOOLS AVAILABLE:
             },
             first_message: "Hi! This is Aria from Lifestyle Home Service. How can I help you today?",
             language: "en"
-          }
+          },
+          tools: [
+            {
+              type: "webhook",
+              name: "get_todays_schedule",
+              description: "Get today's live schedule from HouseCall Pro including all jobs, assigned cleaners, times, addresses, and client preferences. ALWAYS call this before answering any question about today's schedule, who is working, or what jobs are happening.",
+              api_schema: {
+                url: "https://lhs-scheduler-proxy.vercel.app/api/voice-data?action=live_data",
+                method: "GET",
+                headers: { "Authorization": `Bearer ${process.env.INTERNAL_SECRET}` }
+              }
+            },
+            {
+              type: "webhook",
+              name: "save_learning",
+              description: "Save something new you learned about a client, cleaner, or the business. Use when someone tells you new information like a client changing their schedule, a cleaner having an issue, or a pricing change.",
+              api_schema: {
+                url: "https://lhs-scheduler-proxy.vercel.app/api/voice-data?action=save_learning",
+                method: "POST",
+                headers: {
+                  "Authorization": `Bearer ${process.env.INTERNAL_SECRET}`,
+                  "Content-Type": "application/json"
+                },
+                request_body: {
+                  type: "object",
+                  properties: {
+                    subject: { type: "string", description: "Who or what this is about" },
+                    category: { type: "string", description: "Category: client, cleaner, scheduling, pricing, quality, general" },
+                    fact: { type: "string", description: "The new information learned" }
+                  },
+                  required: ["subject", "fact"]
+                }
+              }
+            },
+            {
+              type: "webhook",
+              name: "get_caller_history",
+              description: "Get past conversation history with a specific phone number. Use at the start of calls to recall previous interactions.",
+              api_schema: {
+                url: "https://lhs-scheduler-proxy.vercel.app/api/voice-data?action=caller_history",
+                method: "GET",
+                headers: { "Authorization": `Bearer ${process.env.INTERNAL_SECRET}` },
+                query_params: {
+                  phone: { type: "string", description: "Phone number to look up" }
+                }
+              }
+            }
+          ]
         }
       })
     });

@@ -95,7 +95,25 @@ async function persistTasks() {
       // Update local map to match merged state
       tasks.clear();
       for (const t of allTasks) tasks.set(t.id, t);
-      console.log(`[TASKS] Persisted ${allTasks.length} tasks to KB (merged)`);
+      // Verify the write stuck
+      const verifyResp = await fetch(`${KB_SAVE_URL}?key=${KB_KEY}`);
+      const verifyData = await verifyResp.json();
+      const verifiedCount = Array.isArray(verifyData.value) ? verifyData.value.length : 0;
+      console.log(`[TASKS] Persisted ${allTasks.length} tasks to KB (verified: ${verifiedCount})`);
+
+      if (verifiedCount === 0 && allTasks.length > 0) {
+        // Write didn't stick — retry once
+        console.error('[TASKS] Verify failed — retrying persist...');
+        await fetch(KB_SAVE_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: KB_KEY, value: allTasks })
+        });
+      }
+
+      // Update local map to match merged state
+      tasks.clear();
+      for (const t of allTasks) tasks.set(t.id, t);
     } else {
       console.error(`[TASKS] Persist HTTP error: ${resp.status}`);
     }
