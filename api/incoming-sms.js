@@ -5,6 +5,7 @@ import { getCapacityData } from './capacity-check.js';
 import { saveConversation, saveLearning, buildCallerContext } from './aria-memory.js';
 import { analyzeSchedule } from './scheduling-intelligence.js';
 import { sendEmail, saveDraft, lookupClientEmail, isSensitiveTopic } from './aria-email.js';
+import { logSickDay, detectPatterns } from './sick-day-log.js';
 import { makeCall, lookupClientPhone } from './aria-call.js';
 
 async function sendSMSNotification(to, message) {
@@ -494,7 +495,7 @@ PPE: Face Masks, Gloves (S/M/L), Safety Goggles
 
 HOW TO HANDLE SITUATIONS:
 
-SICK DAY: "Hi [name]! Sorry to hear you're not well. I've noted your absence and will notify your clients right away. Please rest up! Karen will receive a summary. — LHS 🏠"
+SICK DAY: When a cleaner texts that they are sick, not feeling well, can't come in, or calling in sick — ALWAYS use the report_sick_day tool. This triggers the full cascade: finds their jobs, suggests replacements, texts Karen a summary, and logs the absence. Reply warmly to the cleaner: "Hi [name]! Sorry to hear you're not well. I've noted your absence and will take care of notifying your clients. Please rest up! — LHS 🏠"
 
 TIME OFF REQUEST: Ask for dates and type (vacation/sick/unpaid). Confirm you'll submit to Karen for approval.
 
@@ -811,6 +812,16 @@ CATEGORY ASSIGNMENT — choose the most specific match:
           message: { type: 'string', description: 'The message to deliver — natural conversational tone' }
         },
         required: ['client_name', 'message']
+      }
+    }, {
+      name: 'report_sick_day',
+      description: 'Process a sick day report. Use when ANY cleaner (not Karen) texts that they are sick, can\'t come in, not feeling well, calling in sick, or similar. This triggers the full cascade: find affected jobs, suggest replacements, notify Karen, log the sick day.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          cleaner_name: { type: 'string', description: 'Name of the cleaner who is sick' }
+        },
+        required: ['cleaner_name']
       }
     }, {
       name: 'get_schedule_intelligence',
@@ -1239,6 +1250,163 @@ CATEGORY ASSIGNMENT — choose the most specific match:
       } catch (err) {
         console.error('[EMAIL] Failed:', err.message);
         twimlReply = `Sorry, I couldn't send that email. Error: ${err.message.substring(0, 80)}. — LHS 🏠`;
+      }
+
+    } else if (toolUse && toolUse.name === 'report_sick_day') {
+      const { cleaner_name } = toolUse.input;
+      console.log(`[SICK-DAY] Processing sick day for ${cleaner_name}`);
+
+      try {
+        const apiKey = process.env.HCP_API_KEY;
+        const hcpHeaders = { 'Authorization': `Token ${apiKey}`, 'Accept': 'application/json' };
+        const now = new Date();
+        const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+        const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59).toISOString();
+
+        // Fetch today's jobs and client/cleaner data in parallel
+        const [jobsResp, clientsResp] = await Promise.all([
+          fetch(`https://api.housecallpro.com/jobs?scheduled_start_min=${startOfDay}&scheduled_start_max=${endOfDay}&page_size=200`, { headers: hcpHeaders }),
+          fetch('https://lhs-knowledge-base.vercel.app/api/clients')
+        ]);
+
+        const jobsData = await jobsResp.json();
+        const clientsData = await clientsResp.json();
+        const allJobs = (jobsData.jobs || []).filter(j => j.work_status !== 'pro canceled' && !j.deleted_at);
+        const cleaners = clientsData.cleaners || [];
+        const clients = clientsData.clients || [];
+
+        // Find jobs assigned to the sick cleaner
+        const sickJobs = allJobs.filter(j =>
+          (j.assigned_employees || []).some(e =>
+            `${e.first_name} ${e.last_name}`.trim().toLowerCase().includes(cleaner_name.toLowerCase())
+          )
+        );
+
+        if (sickJobs.length === 0) {
+          twimlReply = `Hi ${cleaner_name.split(' ')[0]}! Sorry you're not feeling well. Good news — you don't have any jobs assigned today so rest easy. I'll let Karen know. — LHS 🏠`;
+          await logSickDay({ cleanerName: cleaner_name, cleanerPhone: from, jobsAffected: 0, resolution: 'no_jobs' });
+          await sendSMSNotification('+16048009630', `${cleaner_name} called in sick today but has no jobs assigned. No action needed. — Aria 🏠`);
+        } else {
+          // Build client lookup
+          const clientLookup = {};
+          for (const c of clients) clientLookup[c.name.toLowerCase()] = c;
+
+          // Find available replacements
+          const dayName = now.toLocaleDateString('en-CA', { timeZone: 'America/Vancouver', weekday: 'long' });
+          const hour = now.getHours();
+          const availableCleaners = cleaners.filter(c => {
+            if (!c.days || !c.days.includes(dayName)) return false;
+            if (c.name.toLowerCase().includes(cleaner_name.toLowerCase())) return false;
+            if (c.name === 'Brandi M' && dayName !== 'Friday' && hour >= 14) return false;
+            if (c.name === 'Kristen K' && dayName !== 'Saturday') return false;
+            return true;
+          });
+
+          // Build replacement suggestions for each job
+          const jobSuggestions = [];
+          const affectedClientNames = [];
+
+          for (const job of sickJobs) {
+            const custName = `${job.customer?.first_name || ''} ${job.customer?.last_name || ''}`.trim();
+            affectedClientNames.push(custName);
+            const prefs = clientLookup[custName.toLowerCase()];
+            const startTime = job.schedule?.scheduled_start
+              ? new Date(job.schedule.scheduled_start).toLocaleTimeString('en-CA', { timeZone: 'America/Vancouver', hour: 'numeric', minute: '2-digit' })
+              : '?';
+
+            // Find best replacement
+            let suggested = null;
+            if (prefs?.preferred_cleaner) {
+              const prefNames = prefs.preferred_cleaner.split(',').map(n => n.trim().toLowerCase());
+              suggested = availableCleaners.find(c => prefNames.some(pn => c.name.toLowerCase().includes(pn.split(' ')[0])));
+            }
+            if (!suggested && availableCleaners.length > 0) {
+              // Pick least-loaded available cleaner
+              const loadMap = {};
+              for (const j of allJobs) {
+                for (const e of (j.assigned_employees || [])) {
+                  const n = `${e.first_name} ${e.last_name}`.trim();
+                  loadMap[n] = (loadMap[n] || 0) + 1;
+                }
+              }
+              suggested = availableCleaners.sort((a, b) => (loadMap[a.name] || 0) - (loadMap[b.name] || 0))[0];
+            }
+
+            const isHighPri = prefs?.priority === 'High';
+            const isCommercial = prefs?.client_type === 'Commercial';
+
+            jobSuggestions.push({
+              jobId: job.id,
+              client: custName,
+              time: startTime,
+              address: job.address?.street || '',
+              suggested: suggested?.name || null,
+              needsKaren: isCommercial || !suggested,
+              isHighPri,
+              isCommercial
+            });
+          }
+
+          // Log the sick day
+          const sickEntry = await logSickDay({
+            cleanerName: cleaner_name,
+            cleanerPhone: from,
+            jobsAffected: sickJobs.length,
+            affectedClients: affectedClientNames,
+            replacements: jobSuggestions.map(j => ({ client: j.client, suggested: j.suggested })),
+            resolution: 'pending'
+          });
+
+          // Check for patterns
+          const patterns = await detectPatterns(cleaner_name);
+
+          // Build Karen's summary
+          const autoAssign = jobSuggestions.filter(j => !j.needsKaren && j.suggested);
+          const needsKaren = jobSuggestions.filter(j => j.needsKaren);
+          const highPri = jobSuggestions.filter(j => j.isHighPri);
+
+          let karenMsg = `🤒 ${cleaner_name} called in sick. ${sickJobs.length} job${sickJobs.length !== 1 ? 's' : ''} affected today.\n\n`;
+
+          if (highPri.length > 0) {
+            karenMsg += `⚡ HIGH PRIORITY:\n`;
+            for (const j of highPri) karenMsg += `• ${j.client} at ${j.time} → ${j.suggested || 'NO REPLACEMENT'}\n`;
+            karenMsg += '\n';
+          }
+
+          if (autoAssign.length > 0) {
+            karenMsg += `✅ Can auto-assign (${autoAssign.length}):\n`;
+            for (const j of autoAssign) karenMsg += `• ${j.client} at ${j.time} → ${j.suggested}\n`;
+            karenMsg += '\n';
+          }
+
+          if (needsKaren.length > 0) {
+            karenMsg += `🔒 Need your decision (${needsKaren.length}):\n`;
+            for (const j of needsKaren) karenMsg += `• ${j.client} at ${j.time}${j.isCommercial ? ' (Commercial)' : ''}\n`;
+            karenMsg += '\n';
+          }
+
+          if (patterns.length > 0) {
+            karenMsg += `⚠️ Pattern alert: ${patterns[0].message}\n\n`;
+          }
+
+          karenMsg += `Reply "approve" to auto-assign the ${autoAssign.length} suggested replacements. — Aria 🏠`;
+
+          await sendSMSNotification('+16048009630', karenMsg);
+
+          // Reply to the sick cleaner
+          twimlReply = `Hi ${cleaner_name.split(' ')[0]}! Sorry to hear you're not well. I've noted your absence and will take care of notifying your ${sickJobs.length} client${sickJobs.length !== 1 ? 's' : ''} today. Please rest up and feel better soon! — LHS 🏠`;
+
+          // Save learning
+          await saveLearning({
+            subject: cleaner_name,
+            category: 'cleaner',
+            fact: `Called in sick on ${now.toLocaleDateString('en-CA', { timeZone: 'America/Vancouver' })}. ${sickJobs.length} jobs affected.`,
+            source: 'sick_day_report'
+          }).catch(() => {});
+        }
+      } catch (err) {
+        console.error('[SICK-DAY] Error:', err.message);
+        twimlReply = `Hi ${cleaner_name.split(' ')[0]}! Sorry you're not feeling well. I've noted your absence — Karen will be in touch. Rest up! — LHS 🏠`;
       }
 
     } else if (toolUse && toolUse.name === 'call_client') {

@@ -2,6 +2,7 @@ export const config = { api: { bodyParser: false }, maxDuration: 30 };
 
 import { getMorningBriefingData } from './task-store.js';
 import { getCapacityData } from './capacity-check.js';
+import { getSickDayBriefing } from './sick-day-log.js';
 
 const KAREN_PHONE = '+16048009630';
 
@@ -127,6 +128,22 @@ export default async function handler(req, res) {
     if (upcoming) {
       const daysUntil = Math.ceil((new Date(upcoming.date) - now) / 86400000);
       msg += `\n📅 ${upcoming.name} is ${daysUntil} days away (${upcoming.date}). Want me to review the schedule?\n`;
+    }
+
+    // Sick day pattern alerts (Mondays especially)
+    if (dayName === 'Monday') {
+      try {
+        const sickBriefing = await getSickDayBriefing();
+        if (sickBriefing.patternAlerts.length > 0) {
+          msg += '\n';
+          for (const alert of sickBriefing.patternAlerts.slice(0, 2)) {
+            msg += `⚠️ ${alert.message} Want me to flag this for a review?\n`;
+          }
+        }
+        if (sickBriefing.totalThisMonth > 0) {
+          msg += `📋 ${sickBriefing.totalThisMonth} sick day${sickBriefing.totalThisMonth !== 1 ? 's' : ''} logged this month.\n`;
+        }
+      } catch (e) {}
     }
 
     {
