@@ -55,18 +55,22 @@ async function hydrateTasks() {
   return hydratePromise;
 }
 
-function persistTasks() {
-  // Fire and forget — don't block the caller
+async function persistTasks() {
   const allTasks = Array.from(tasks.values());
-  fetch(KB_SAVE_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ key: KB_KEY, value: allTasks })
-  }).then(() => {
-    console.log(`[TASKS] Persisted ${allTasks.length} tasks to KB`);
-  }).catch(err => {
+  try {
+    const resp = await fetch(KB_SAVE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: KB_KEY, value: allTasks })
+    });
+    if (resp.ok) {
+      console.log(`[TASKS] Persisted ${allTasks.length} tasks to KB`);
+    } else {
+      console.error(`[TASKS] Persist HTTP error: ${resp.status}`);
+    }
+  } catch (err) {
     console.error('[TASKS] Persist failed:', err.message);
-  });
+  }
 }
 
 // ─── Priority sorting ───────────────────────────────────────────────────────
@@ -129,7 +133,7 @@ export async function saveTask({
   };
 
   tasks.set(task.id, task);
-  persistTasks();
+  await persistTasks();
   console.log(`[TASKS] Created: ${task.id} — "${description}" (${priority}, due: ${due_date || 'none'})`);
   return task;
 }
@@ -143,7 +147,7 @@ export async function completeTask(taskId) {
   task.status = 'completed';
   task.completed_at = new Date().toISOString();
   tasks.set(taskId, task);
-  persistTasks();
+  await persistTasks();
   console.log(`[TASKS] Completed: ${task.id} — "${task.description}"`);
   return task;
 }
@@ -156,7 +160,7 @@ export async function updateTask(taskId, fields) {
 
   Object.assign(task, fields);
   tasks.set(taskId, task);
-  persistTasks();
+  await persistTasks();
   return task;
 }
 
