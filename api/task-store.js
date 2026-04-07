@@ -1,6 +1,12 @@
 // Task storage module for Aria — Karen's digital chief of staff
 // In-memory Map with persistence to lhs-knowledge-base save.js
 // Imported directly by incoming-sms.js and briefing endpoints
+//
+// PERMANENCE POLICY:
+// - Tasks NEVER expire or auto-delete. Ever.
+// - Completed tasks stay permanently as searchable history.
+// - The ONLY way a task is removed is Karen explicitly saying "delete this task".
+// - Aria uses completed task history as part of her memory system.
 
 const KB_SAVE_URL = 'https://lhs-knowledge-base.vercel.app/api/save';
 const KB_KEY = 'aria_tasks';
@@ -244,6 +250,35 @@ export async function getTasksCompletedToday() {
   });
 }
 
+// ALL completed tasks — permanent archive, never auto-deleted
+export async function getAllCompletedTasks() {
+  await hydrateTasks();
+  return Array.from(tasks.values())
+    .filter(t => t.status === 'completed')
+    .sort((a, b) => (b.completed_at || '').localeCompare(a.completed_at || ''));
+}
+
+// Completed tasks within a date range
+export async function getCompletedTasksInRange(startDate, endDate) {
+  await hydrateTasks();
+  return Array.from(tasks.values()).filter(t => {
+    if (t.status !== 'completed' || !t.completed_at) return false;
+    const completedDate = new Date(t.completed_at).toLocaleDateString('en-CA', { timeZone: TIMEZONE });
+    return completedDate >= startDate && completedDate <= endDate;
+  }).sort((a, b) => (b.completed_at || '').localeCompare(a.completed_at || ''));
+}
+
+// Explicit delete — the ONLY way a task is ever removed
+export async function deleteTask(taskId) {
+  await hydrateTasks();
+  const task = tasks.get(taskId);
+  if (!task) return null;
+  tasks.delete(taskId);
+  await persistTasks();
+  console.log(`[TASKS] Deleted: ${task.id} — "${task.description}" (by explicit request)`);
+  return task;
+}
+
 export async function searchTasks(query, statusFilter = 'all') {
   await hydrateTasks();
   const q = query.toLowerCase();
@@ -282,17 +317,19 @@ export async function getEveningBriefingData() {
   const completedToday = await getTasksCompletedToday();
   const open = await getOpenTasks();
 
-  // Tomorrow's priorities — overdue + due tomorrow + top open
+  // Recent completions for context (last 7 days)
   const today = todayPT();
-  const tomorrow = new Date(new Date().toLocaleString('en-US', { timeZone: TIMEZONE }));
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowStr = tomorrow.toISOString().split('T')[0];
+  const weekAgo = new Date(new Date().toLocaleString('en-US', { timeZone: TIMEZONE }));
+  weekAgo.setDate(weekAgo.getDate() - 7);
+  const weekAgoStr = weekAgo.toLocaleDateString('en-CA', { timeZone: TIMEZONE });
+  const recentCompleted = await getCompletedTasksInRange(weekAgoStr, today);
 
   const tomorrowPriorities = open.slice(0, 10);
   const estimatedMinutes = completedToday.reduce((sum, t) => sum + (t.estimated_time_minutes || 15), 0);
 
   return {
     completedToday,
+    completedThisWeek: recentCompleted,
     stillOpen: open,
     tomorrowPriorities,
     estimatedMinutesSaved: estimatedMinutes
