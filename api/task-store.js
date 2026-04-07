@@ -37,10 +37,10 @@ async function hydrateTasks() {
       console.log('[TASKS] Hydrating from knowledge base...');
       const res = await fetch(`${KB_SAVE_URL}?key=${KB_KEY}`);
       const data = await res.json();
-      tasks.clear();
       if (data.value && Array.isArray(data.value)) {
         for (const t of data.value) {
-          tasks.set(t.id, t);
+          // Only add if not already in local map (local wins on conflict)
+          if (!tasks.has(t.id)) tasks.set(t.id, t);
         }
         console.log(`[TASKS] Hydrated ${data.value.length} tasks`);
       } else {
@@ -58,20 +58,44 @@ async function hydrateTasks() {
 
 // Force re-read from KB — used by tasks API to always serve fresh data
 export async function forceHydrate() {
-  hydrated = false;
-  await hydrateTasks();
+  try {
+    const res = await fetch(`${KB_SAVE_URL}?key=${KB_KEY}`);
+    const data = await res.json();
+    if (data.value && Array.isArray(data.value)) {
+      tasks.clear();
+      for (const t of data.value) tasks.set(t.id, t);
+      console.log(`[TASKS] Force hydrated ${data.value.length} tasks from KB`);
+    }
+  } catch (err) {
+    console.error('[TASKS] Force hydrate failed:', err.message);
+  }
+  hydrated = true;
 }
 
 async function persistTasks() {
-  const allTasks = Array.from(tasks.values());
   try {
+    // Read-then-merge: fetch current KB state, merge with local changes, write back
+    // This prevents instance A from overwriting instance B's tasks
+    const readResp = await fetch(`${KB_SAVE_URL}?key=${KB_KEY}`);
+    const readData = await readResp.json();
+    const kbTasks = (readData.value && Array.isArray(readData.value)) ? readData.value : [];
+
+    // Build a merged map: KB tasks as base, local tasks override by ID
+    const merged = new Map();
+    for (const t of kbTasks) merged.set(t.id, t);
+    for (const t of tasks.values()) merged.set(t.id, t); // Local wins on conflict
+
+    const allTasks = Array.from(merged.values());
     const resp = await fetch(KB_SAVE_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ key: KB_KEY, value: allTasks })
     });
     if (resp.ok) {
-      console.log(`[TASKS] Persisted ${allTasks.length} tasks to KB`);
+      // Update local map to match merged state
+      tasks.clear();
+      for (const t of allTasks) tasks.set(t.id, t);
+      console.log(`[TASKS] Persisted ${allTasks.length} tasks to KB (merged)`);
     } else {
       console.error(`[TASKS] Persist HTTP error: ${resp.status}`);
     }
