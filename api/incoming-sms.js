@@ -578,7 +578,7 @@ CATEGORY ASSIGNMENT:
           description: { type: 'string', description: 'Clear description of the task (e.g. "Follow up with Ladda about interview")' },
           priority: { type: 'string', enum: ['high', 'medium', 'low'], description: 'Task priority' },
           category: { type: 'string', enum: ['client', 'staff', 'admin', 'billing', 'scheduling'], description: 'Task category' },
-          due_date: { type: 'string', description: 'Due date in YYYY-MM-DD format, or null if no specific date' },
+          due_date: { type: 'string', description: `Due date in YYYY-MM-DD format, or null if no specific date. TODAY is ${new Date().toLocaleDateString('en-CA', { timeZone: 'America/Vancouver' })}. Calculate relative dates from today (e.g. "Thursday" means the next upcoming Thursday from today).` },
           assigned_to: { type: 'string', enum: ['karen', 'aria'], description: 'Who handles this. Default karen.' },
           estimated_time_minutes: { type: 'number', description: 'Estimated minutes to complete' },
           notes: { type: 'string', description: 'Additional context or details' }
@@ -661,7 +661,7 @@ CATEGORY ASSIGNMENT:
         } else if (result.matched === 0) {
           twimlReply = `No upcoming jobs found for "${client}". Double-check the name? — LHS 🏠`;
         } else {
-          twimlReply = textBlock?.text?.trim() || `On it! Adding "${note}" to ${client} jobs. — LHS 🏠`;
+          twimlReply = `On it! Adding "${note}" to ${client} jobs. — LHS 🏠`;
         }
       } catch (err) {
         console.error('[BULK-NOTES] Execution failed:', err.message);
@@ -683,8 +683,7 @@ CATEGORY ASSIGNMENT:
           source_message: incomingMessage
         });
 
-        twimlReply = textBlock?.text?.trim() ||
-          `Got it! I've saved "${description}"${due_date ? ` for ${due_date}` : ''}. I'll keep track of this for you! — LHS 🏠`;
+        twimlReply = `Got it! I've saved "${description}"${due_date ? ` for ${due_date}` : ''}. I'll keep track of this for you! — LHS 🏠`;
       } catch (err) {
         console.error('[TASKS] Save failed:', err.message);
         twimlReply = `Sorry, I couldn't save that task. Please try again! — LHS 🏠`;
@@ -705,14 +704,12 @@ CATEGORY ASSIGNMENT:
             const completedDate = t.completed_at ? new Date(t.completed_at).toLocaleDateString('en-CA', { timeZone: 'America/Vancouver' }) : 'earlier';
             twimlReply = `That one's already done! "${t.description}" was completed on ${completedDate}. — LHS 🏠`;
           } else {
-            twimlReply = textBlock?.text?.trim() ||
-              `I couldn't find an open task matching "${search_query}". Could you try different keywords? — LHS 🏠`;
+            twimlReply = `I couldn't find an open task matching "${search_query}". Could you try different keywords? — LHS 🏠`;
           }
         } else {
           const task = await completeTask(results[0].id);
           const openCount = (await getOpenTasks()).length;
-          twimlReply = textBlock?.text?.trim() ||
-            `Nice work! Marked "${task.description}" as done. ✓ You have ${openCount} task${openCount !== 1 ? 's' : ''} remaining. — LHS 🏠`;
+          twimlReply = `Nice work! Marked "${task.description}" as done. ✓ You have ${openCount} task${openCount !== 1 ? 's' : ''} remaining. — LHS 🏠`;
         }
       } catch (err) {
         console.error('[TASKS] Complete failed:', err.message);
@@ -734,8 +731,7 @@ CATEGORY ASSIGNMENT:
         }
 
         if (results.length === 0) {
-          twimlReply = textBlock?.text?.trim() ||
-            `Nothing found for "${search_query}". Your slate is clean! — LHS 🏠`;
+          twimlReply = `Nothing found for "${search_query}". Your slate is clean! — LHS 🏠`;
         } else {
           const shown = results.slice(0, 5);
           const lines = shown.map(t => {
