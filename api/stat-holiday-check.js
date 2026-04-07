@@ -37,7 +37,7 @@ async function sendSMS(to, message) {
   return response.json();
 }
 
-function getUpcomingHolidays(withinDays = 21) {
+function getUpcomingHolidays(withinDays = 28) {
   const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Vancouver' });
   const cutoff = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Vancouver' }));
   cutoff.setDate(cutoff.getDate() + withinDays);

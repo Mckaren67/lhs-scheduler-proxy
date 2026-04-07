@@ -2,6 +2,25 @@ export const config = { api: { bodyParser: true }, maxDuration: 60 };
 import { executeBulkNotes } from './bulk-job-notes.js';
 import { saveTask, completeTask, searchTasks, getOpenTasks, getOverdueTasks } from './task-store.js';
 
+async function sendSMSNotification(to, message) {
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const from = process.env.TWILIO_PHONE_NUMBER;
+  const toPhone = to.startsWith('+') ? to : to.length === 10 ? `+1${to}` : `+${to}`;
+  const response = await fetch(
+    `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,
+    {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Basic ' + Buffer.from(`${accountSid}:${authToken}`).toString('base64'),
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: new URLSearchParams({ To: toPhone, From: from, Body: message }).toString()
+    }
+  );
+  return response.json();
+}
+
 // Multi-turn conversation memory
 // Stores last 10 messages per phone number, expires after 2 hours of inactivity
 const conversationStore = new Map();
@@ -558,6 +577,12 @@ build_stat_holiday_plan: Use when Karen says "yes build the plan" or "build the 
   Commercial clients are flagged as "locked" — Karen must decide. Residential clients get a suggested nearest day.
   NEVER reschedule anything without Karen's explicit approval — the plan is a proposal only.
 
+approve_stat_holiday_plan: Use when Karen says "approve the plan", "go ahead and reschedule", "yes do it", or "approve" after seeing a rescheduling plan. Examples:
+  "approve the plan" → approve_stat_holiday_plan
+  "go ahead and reschedule the flexible ones" → approve_stat_holiday_plan
+  This will: update flexible jobs in HCP, SMS each affected client, SMS each assigned cleaner, and confirm to Karen.
+  ONLY use after Karen has seen and explicitly approved a rescheduling plan. Never auto-execute.
+
 TONE: Be warm, encouraging, and personal. Karen is shifting from a paper notebook to digital — make her feel supported:
   "You're doing great, Karen — I've got this covered for you!"
   "That's 5 tasks done today! You're crushing it! 🎉"
@@ -652,6 +677,17 @@ CATEGORY ASSIGNMENT — choose the most specific match:
         properties: {
           holiday_date: { type: 'string', description: `The stat holiday date in YYYY-MM-DD format. 2026 BC holidays: Victoria Day=2026-05-18, Indigenous Peoples Day=2026-06-21, Canada Day=2026-07-01, BC Day=2026-08-03, Labour Day=2026-09-07, Truth & Reconciliation=2026-09-30, Thanksgiving=2026-10-12, Remembrance Day=2026-11-11, Christmas=2026-12-25, Boxing Day=2026-12-26` },
           holiday_name: { type: 'string', description: 'Name of the holiday (e.g. "Victoria Day")' }
+        },
+        required: ['holiday_date', 'holiday_name']
+      }
+    }, {
+      name: 'approve_stat_holiday_plan',
+      description: 'Execute the approved stat holiday rescheduling plan. Use when Karen says "approve the plan", "go ahead and reschedule", or "yes do it" after seeing a rescheduling plan. This will update flexible client jobs in HCP, notify affected clients by SMS, and notify assigned cleaners.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          holiday_date: { type: 'string', description: 'The stat holiday date in YYYY-MM-DD format' },
+          holiday_name: { type: 'string', description: 'Name of the holiday' }
         },
         required: ['holiday_date', 'holiday_name']
       }
@@ -867,6 +903,118 @@ CATEGORY ASSIGNMENT — choose the most specific match:
       } catch (err) {
         console.error('[STAT-PLAN] Error:', err.message);
         twimlReply = `Sorry, I couldn't build the rescheduling plan for ${holiday_name}. Please try again! — LHS 🏠`;
+      }
+
+    } else if (toolUse && toolUse.name === 'approve_stat_holiday_plan') {
+      const { holiday_date, holiday_name } = toolUse.input;
+      console.log(`[STAT-APPROVE] Executing approved plan for ${holiday_name} (${holiday_date})`);
+
+      try {
+        const apiKey = process.env.HCP_API_KEY;
+        const hcpHeaders = { 'Authorization': `Token ${apiKey}`, 'Content-Type': 'application/json', 'Accept': 'application/json' };
+        const start = `${holiday_date}T00:00:00Z`;
+        const end = `${holiday_date}T23:59:59Z`;
+
+        // Fetch jobs and client data
+        const [jobsResp, clientsResp] = await Promise.all([
+          fetch(`https://api.housecallpro.com/jobs?scheduled_start_min=${start}&scheduled_start_max=${end}&page_size=200`, { headers: hcpHeaders }),
+          fetch('https://lhs-knowledge-base.vercel.app/api/clients')
+        ]);
+
+        const jobsData = await jobsResp.json();
+        const clientsData = await clientsResp.json();
+        const jobs = (jobsData.jobs || []).filter(j => j.work_status !== 'pro canceled' && !j.deleted_at);
+        const clients = clientsData.clients || [];
+        const clientLookup = {};
+        for (const c of clients) clientLookup[c.name.toLowerCase()] = c;
+
+        const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+        let rescheduled = 0;
+        let locked = 0;
+        const clientsNotified = [];
+        const cleanersNotified = new Map();
+
+        for (const job of jobs) {
+          const custName = `${job.customer?.first_name || ''} ${job.customer?.last_name || ''}`.trim();
+          const prefs = clientLookup[custName.toLowerCase()];
+          const isCommercial = prefs?.client_type === 'Commercial';
+
+          if (isCommercial) {
+            locked++;
+            continue; // Skip locked — Karen handles these
+          }
+
+          // Calculate new date: day before holiday, skip Sunday
+          const newDate = new Date(holiday_date + 'T12:00:00Z');
+          newDate.setDate(newDate.getDate() - 1);
+          if (newDate.getUTCDay() === 0) newDate.setDate(newDate.getDate() - 1); // Skip Sunday
+
+          // Reschedule in HCP
+          const origStart = new Date(job.schedule?.scheduled_start);
+          const origEnd = new Date(job.schedule?.scheduled_end);
+          const duration = origEnd - origStart;
+          const newStart = new Date(newDate.toISOString().split('T')[0] + 'T' + origStart.toISOString().split('T')[1]);
+          const newEnd = new Date(newStart.getTime() + duration);
+
+          try {
+            const schedResp = await fetch(`https://api.housecallpro.com/jobs/${job.id}/schedule`, {
+              method: 'PUT',
+              headers: hcpHeaders,
+              body: JSON.stringify({ start_time: newStart.toISOString(), end_time: newEnd.toISOString() })
+            });
+
+            if (schedResp.ok) {
+              rescheduled++;
+              const newDateStr = newDate.toLocaleDateString('en-CA', { timeZone: 'America/Vancouver', month: 'long', day: 'numeric', weekday: 'long' });
+
+              // Notify client
+              const clientPhone = job.customer?.mobile_number || job.customer?.home_number;
+              if (clientPhone) {
+                await sendSMSNotification(clientPhone,
+                  `Hi ${job.customer.first_name}! Your cleaning on ${holiday_name} has been moved to ${newDateStr}. Same time, same great service! Questions? Call us at 604-260-1925. — LHS 🏠`
+                );
+                clientsNotified.push(custName);
+              }
+
+              // Track cleaners to notify
+              for (const emp of (job.assigned_employees || [])) {
+                if (emp.mobile_number && !cleanersNotified.has(emp.mobile_number)) {
+                  cleanersNotified.set(emp.mobile_number, {
+                    name: `${emp.first_name} ${emp.last_name}`.trim(),
+                    phone: emp.mobile_number
+                  });
+                }
+              }
+            } else {
+              console.error(`[STAT-APPROVE] Reschedule failed for ${job.id}:`, await schedResp.text());
+            }
+          } catch (err) {
+            console.error(`[STAT-APPROVE] Error rescheduling ${job.id}:`, err.message);
+          }
+        }
+
+        // Notify all affected cleaners
+        const cleanerNames = [];
+        for (const [phone, cleaner] of cleanersNotified) {
+          const result = await sendSMSNotification(phone,
+            `Hi ${cleaner.name.split(' ')[0]}! Some of your ${holiday_name} jobs have been rescheduled. Please check HouseCall Pro for your updated schedule. Questions? Text back or call Karen. — LHS 🏠`
+          );
+          if (result.sid) cleanerNames.push(cleaner.name);
+        }
+
+        let msg = `Done! ${holiday_name} rescheduling complete:\n\n`;
+        msg += `✅ ${rescheduled} job${rescheduled !== 1 ? 's' : ''} rescheduled\n`;
+        if (locked > 0) msg += `🔒 ${locked} commercial job${locked !== 1 ? 's' : ''} still need your decision\n`;
+        if (clientsNotified.length > 0) msg += `📱 ${clientsNotified.length} client${clientsNotified.length !== 1 ? 's' : ''} notified\n`;
+        if (cleanerNames.length > 0) msg += `👷 Cleaners notified: ${cleanerNames.join(', ')}\n`;
+        msg += `\n— Aria 🏠`;
+
+        twimlReply = msg;
+        console.log(`[STAT-APPROVE] Complete: ${rescheduled} rescheduled, ${locked} locked, ${clientsNotified.length} clients notified, ${cleanerNames.length} cleaners notified`);
+
+      } catch (err) {
+        console.error('[STAT-APPROVE] Error:', err.message);
+        twimlReply = `Sorry, something went wrong executing the rescheduling plan. Please try again! — LHS 🏠`;
       }
 
     } else {
