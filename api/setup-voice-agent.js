@@ -145,6 +145,38 @@ TOOLS AVAILABLE:
                   phone: { type: "string", description: "Phone number to look up" }
                 }
               }
+            },
+            {
+              type: "webhook",
+              name: "get_schedule_intelligence",
+              description: "Get proactive scheduling analysis for the next 7 days. Spots gaps, conflicts, overloaded cleaners, and preferred cleaner mismatches. Use when someone asks about the schedule or when you want to proactively flag issues.",
+              api_schema: {
+                url: "https://lhs-scheduler-proxy.vercel.app/api/scheduling-intelligence",
+                method: "GET",
+                headers: { "Authorization": `Bearer ${process.env.INTERNAL_SECRET}` }
+              }
+            },
+            {
+              type: "webhook",
+              name: "suggest_and_implement_change",
+              description: "Suggest a schedule change to Karen during voice. Describe what you'd change and why. Only suggest — Karen must approve verbally before any changes are made in HCP.",
+              api_schema: {
+                url: "https://lhs-scheduler-proxy.vercel.app/api/voice-data?action=save_learning",
+                method: "POST",
+                headers: {
+                  "Authorization": `Bearer ${process.env.INTERNAL_SECRET}`,
+                  "Content-Type": "application/json"
+                },
+                request_body: {
+                  type: "object",
+                  properties: {
+                    subject: { type: "string", description: "Client or topic" },
+                    category: { type: "string" },
+                    fact: { type: "string", description: "The suggestion made and Karen's response" }
+                  },
+                  required: ["subject", "fact"]
+                }
+              }
             }
           ]
         }

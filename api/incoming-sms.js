@@ -3,6 +3,7 @@ import { executeBulkNotes } from './bulk-job-notes.js';
 import { saveTask, completeTask, searchTasks, getOpenTasks, getOverdueTasks } from './task-store.js';
 import { getCapacityData } from './capacity-check.js';
 import { saveConversation, saveLearning, buildCallerContext } from './aria-memory.js';
+import { analyzeSchedule } from './scheduling-intelligence.js';
 
 async function sendSMSNotification(to, message) {
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
@@ -549,6 +550,16 @@ Always be warm, helpful, knowledgeable and professional. You ARE Lifestyle Home 
 
 ADMIN CAPABILITIES (you are texting with Karen or another admin):
 
+YOU ARE A STRATEGIC SCHEDULING PARTNER — not just an assistant:
+- You proactively bring insights Karen would want to know — don't wait to be asked
+- You think ahead — spot problems before Karen does
+- You remember every past conversation and reference it naturally
+- You make specific actionable suggestions and implement them when approved
+- You learn from every interaction and get smarter every week
+- When Karen asks about the schedule, use get_schedule_intelligence to give her a real briefing, not generic answers
+- When you spot an issue, suggest a specific fix with suggest_schedule_change
+- Only implement changes after Karen explicitly approves
+
 JOB NOTES: Use the add_job_note tool when asked to add a note to a client's jobs. If the client name is unclear, ask for clarification first.
 
 TASK MANAGEMENT — You are Karen's digital chief of staff. Use these tools:
@@ -599,6 +610,19 @@ save_learning: Use PROACTIVELY when you discover new information during a conver
   Karen says "Holly can't do heavy lifting anymore" → save_learning about Holly
   Karen says "Valley Toyota wants biweekly instead of weekly" → save_learning about Valley Toyota
   You don't need to ask permission — just save it and confirm: "Noted! I'll remember that Hans Claus switched to Wednesdays."
+
+get_schedule_intelligence: Use when Karen asks about the schedule, asks "how's the week looking", or when you want to proactively flag issues. Examples:
+  "how's next week looking?" → get_schedule_intelligence
+  "any scheduling issues?" → get_schedule_intelligence
+  "what do I need to know about this week?" → get_schedule_intelligence
+  After getting results, summarize the top 2-3 insights conversationally and offer to dig into any of them.
+
+suggest_schedule_change: Use after identifying an issue to propose a specific fix. Present clearly:
+  "I noticed Holly is booked on Wednesday but she's unavailable. Want me to move her Wednesday client to April W instead?"
+  ALWAYS wait for Karen to approve before implementing. Never auto-execute.
+
+implement_schedule_change: Use ONLY after Karen explicitly says "yes", "go ahead", "do it", "approve" to a suggested change.
+  Updates the job in HCP and notifies the cleaner. Always confirm what was done.
 
 check_capacity: Use when Karen asks about capacity, staffing levels, workload, or whether to hire. Examples:
   "what's our capacity?" → check_capacity
@@ -733,6 +757,38 @@ CATEGORY ASSIGNMENT — choose the most specific match:
           fact: { type: 'string', description: 'The new fact or information learned' }
         },
         required: ['subject', 'category', 'fact']
+      }
+    }, {
+      name: 'get_schedule_intelligence',
+      description: 'Get proactive scheduling analysis for the next 7 days. Spots gaps, conflicts, overloaded cleaners, preferred cleaner mismatches, and cleaners booked on unavailable days. Use when Karen asks about the schedule, staffing, or when you want to proactively flag issues.',
+      input_schema: { type: 'object', properties: {}, required: [] }
+    }, {
+      name: 'suggest_schedule_change',
+      description: 'Propose a specific schedule change for Karen to approve. Use after identifying an issue via schedule intelligence. Present the change clearly and wait for Karen to say yes before implementing.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          job_id: { type: 'string', description: 'The HCP job ID to change' },
+          client_name: { type: 'string', description: 'Client name for the job' },
+          change_type: { type: 'string', enum: ['reschedule', 'reassign', 'cancel'], description: 'Type of change' },
+          current_state: { type: 'string', description: 'Current assignment/date (e.g. "Monday April 7, assigned to Holly")' },
+          proposed_state: { type: 'string', description: 'Proposed new assignment/date (e.g. "Tuesday April 8, assigned to April W")' },
+          reason: { type: 'string', description: 'Why this change is recommended' }
+        },
+        required: ['client_name', 'change_type', 'current_state', 'proposed_state', 'reason']
+      }
+    }, {
+      name: 'implement_schedule_change',
+      description: 'Execute an approved schedule change in HCP. ONLY use after Karen has explicitly approved the change. Updates the job in HCP and notifies the affected cleaner.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          job_id: { type: 'string', description: 'The HCP job ID to update' },
+          new_date: { type: 'string', description: 'New date in YYYY-MM-DD format' },
+          new_start_time: { type: 'string', description: 'New start time in HH:MM format (24h, Pacific)' },
+          new_end_time: { type: 'string', description: 'New end time in HH:MM format (24h, Pacific)' }
+        },
+        required: ['job_id', 'new_date']
       }
     }] : [];
 
@@ -1102,6 +1158,106 @@ CATEGORY ASSIGNMENT — choose the most specific match:
       } catch (err) {
         console.error('[MEMORY] Save learning failed:', err.message);
         twimlReply = `Got it, though I had trouble saving that note. I'll keep it in mind for this conversation. — LHS 🏠`;
+      }
+
+    } else if (toolUse && toolUse.name === 'get_schedule_intelligence') {
+      console.log('[SCHED-INTEL] Running schedule analysis via tool');
+      try {
+        const result = await analyzeSchedule();
+        const topInsights = result.insights.slice(0, 3);
+        const topRecs = result.recommendations.slice(0, 2);
+
+        let msg = `Here's what I see for the next 7 days (${result.jobCount} jobs):\n\n`;
+        if (topInsights.length > 0) {
+          for (const i of topInsights) msg += `• ${i}\n`;
+        }
+        if (topRecs.length > 0) {
+          msg += `\nI'd recommend:\n`;
+          for (const r of topRecs) msg += `• ${r}\n`;
+        }
+        if (topInsights.length === 0 && topRecs.length === 0) {
+          msg += `Everything looks great — no conflicts or issues this week!`;
+        }
+        msg += `\nWant me to dig into any of these? — LHS 🏠`;
+        twimlReply = msg;
+      } catch (err) {
+        console.error('[SCHED-INTEL] Error:', err.message);
+        twimlReply = `Sorry, I couldn't analyze the schedule right now. Please try again! — LHS 🏠`;
+      }
+
+    } else if (toolUse && toolUse.name === 'suggest_schedule_change') {
+      const { client_name, change_type, current_state, proposed_state, reason } = toolUse.input;
+      console.log(`[SCHED-CHANGE] Suggesting: ${client_name} — ${change_type}`);
+
+      let msg = `I'd like to suggest a change:\n\n`;
+      msg += `Client: ${client_name}\n`;
+      msg += `Currently: ${current_state}\n`;
+      msg += `Proposed: ${proposed_state}\n`;
+      msg += `Reason: ${reason}\n\n`;
+      msg += `Want me to go ahead with this? — LHS 🏠`;
+      twimlReply = msg;
+
+      // Save the suggestion as a learning so Aria remembers it
+      await saveLearning({
+        subject: client_name,
+        category: 'scheduling',
+        fact: `Suggested ${change_type}: ${current_state} → ${proposed_state}. Reason: ${reason}`,
+        source: 'schedule_intelligence'
+      }).catch(() => {});
+
+    } else if (toolUse && toolUse.name === 'implement_schedule_change') {
+      const { job_id, new_date, new_start_time, new_end_time } = toolUse.input;
+      console.log(`[SCHED-CHANGE] Implementing: ${job_id} → ${new_date} ${new_start_time || ''}`);
+
+      try {
+        const apiKey = process.env.HCP_API_KEY;
+        const startISO = new_start_time
+          ? `${new_date}T${new_start_time}:00-07:00`
+          : `${new_date}T09:00:00-07:00`;
+        const endISO = new_end_time
+          ? `${new_date}T${new_end_time}:00-07:00`
+          : `${new_date}T11:00:00-07:00`;
+
+        const resp = await fetch(`https://api.housecallpro.com/jobs/${job_id}/schedule`, {
+          method: 'PUT',
+          headers: { 'Authorization': `Token ${apiKey}`, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          body: JSON.stringify({ start_time: startISO, end_time: endISO })
+        });
+
+        if (resp.ok) {
+          // Notify the assigned cleaner
+          const jobResp = await fetch(`https://api.housecallpro.com/jobs/${job_id}`, {
+            headers: { 'Authorization': `Token ${apiKey}`, 'Accept': 'application/json' }
+          });
+          const jobData = await jobResp.json();
+          const custName = `${jobData.customer?.first_name || ''} ${jobData.customer?.last_name || ''}`.trim();
+
+          for (const emp of (jobData.assigned_employees || [])) {
+            if (emp.mobile_number) {
+              const phone = emp.mobile_number.length === 10 ? `+1${emp.mobile_number}` : `+${emp.mobile_number}`;
+              await sendSMSNotification(phone,
+                `Hi ${emp.first_name}, the ${custName} job has been moved to ${new_date}. Please check HouseCall Pro for your updated schedule. — LHS 🏠`
+              );
+            }
+          }
+
+          // Save as a learning
+          await saveLearning({
+            subject: custName,
+            category: 'scheduling',
+            fact: `Job rescheduled to ${new_date}${new_start_time ? ' at ' + new_start_time : ''}. Karen approved.`,
+            source: 'schedule_change'
+          }).catch(() => {});
+
+          twimlReply = `Done! Moved ${custName} to ${new_date}. The cleaner has been notified. — LHS 🏠`;
+        } else {
+          const errText = await resp.text();
+          console.error(`[SCHED-CHANGE] HCP error: ${resp.status} ${errText}`);
+          twimlReply = `Sorry, I couldn't update that job in HCP. Error: ${resp.status}. Please try manually. — LHS 🏠`;
+        }
+      } catch (err) {
+        console.error('[SCHED-CHANGE] Error:', err.message);
+        twimlReply = `Sorry, something went wrong with the schedule change. Please try again! — LHS 🏠`;
       }
 
     } else {
