@@ -98,12 +98,37 @@ export default async function handler(req, res) {
     const result = await sendSMS(KAREN_PHONE, msg);
     console.log(`[MORNING] Briefing sent:`, result.sid ? `SID ${result.sid}` : 'failed');
 
+    // On Mondays, also trigger the stat holiday check
+    let statHolidayResult = null;
+    if (dayName === 'Monday') {
+      try {
+        console.log('[MORNING] Monday — triggering stat holiday check...');
+        const baseUrl = process.env.VERCEL_URL
+          ? `https://${process.env.VERCEL_URL}`
+          : 'https://lhs-scheduler-proxy.vercel.app';
+        // Use internal secret since we can't self-call reliably
+        // Instead, run the check inline
+        const { default: statCheck } = await import('./stat-holiday-check.js');
+        const mockRes = {
+          status: () => mockRes,
+          json: (data) => { statHolidayResult = data; return mockRes; },
+          setHeader: () => {}
+        };
+        const mockReq = { headers: { authorization: `Bearer ${process.env.INTERNAL_SECRET}` } };
+        await statCheck(mockReq, mockRes);
+        console.log('[MORNING] Stat holiday check result:', JSON.stringify(statHolidayResult));
+      } catch (err) {
+        console.error('[MORNING] Stat holiday check failed:', err.message);
+      }
+    }
+
     return res.status(200).json({
       ok: true,
       jobCount,
       openTasks: briefing.openCount,
       overdue: briefing.overdueCount,
-      messageSid: result.sid || null
+      messageSid: result.sid || null,
+      statHolidayCheck: statHolidayResult
     });
 
   } catch (err) {

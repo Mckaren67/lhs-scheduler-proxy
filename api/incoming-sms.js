@@ -551,6 +551,13 @@ search_tasks: Use when Karen asks about tasks, what's pending, or whether someth
   "anything overdue?" → search_tasks with search_query "overdue"
   "what happened with A1 Pumps?" → search_tasks with search_query "A1 Pumps"
 
+build_stat_holiday_plan: Use when Karen says "yes build the plan" or "build the rescheduling plan" for a stat holiday. Examples:
+  "yes build the plan for Victoria Day" → build_stat_holiday_plan
+  "build the rescheduling plan for Canada Day" → build_stat_holiday_plan
+  This fetches all jobs on the holiday, analyses client flexibility, and presents a plan for Karen to approve.
+  Commercial clients are flagged as "locked" — Karen must decide. Residential clients get a suggested nearest day.
+  NEVER reschedule anything without Karen's explicit approval — the plan is a proposal only.
+
 TONE: Be warm, encouraging, and personal. Karen is shifting from a paper notebook to digital — make her feel supported:
   "You're doing great, Karen — I've got this covered for you!"
   "That's 5 tasks done today! You're crushing it! 🎉"
@@ -636,6 +643,17 @@ CATEGORY ASSIGNMENT — choose the most specific match:
           status_filter: { type: 'string', enum: ['open', 'completed', 'all'], description: 'Filter by status. Default: all.' }
         },
         required: ['search_query']
+      }
+    }, {
+      name: 'build_stat_holiday_plan',
+      description: 'Build a rescheduling plan for a stat holiday. Use when Karen says "yes build the plan" or "build the rescheduling plan" for a stat holiday.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          holiday_date: { type: 'string', description: `The stat holiday date in YYYY-MM-DD format. 2026 BC holidays: Victoria Day=2026-05-18, Indigenous Peoples Day=2026-06-21, Canada Day=2026-07-01, BC Day=2026-08-03, Labour Day=2026-09-07, Truth & Reconciliation=2026-09-30, Thanksgiving=2026-10-12, Remembrance Day=2026-11-11, Christmas=2026-12-25, Boxing Day=2026-12-26` },
+          holiday_name: { type: 'string', description: 'Name of the holiday (e.g. "Victoria Day")' }
+        },
+        required: ['holiday_date', 'holiday_name']
       }
     }] : [];
 
@@ -778,6 +796,77 @@ CATEGORY ASSIGNMENT — choose the most specific match:
       } catch (err) {
         console.error('[TASKS] Search failed:', err.message);
         twimlReply = `Sorry, I couldn't search tasks right now. Please try again! — LHS 🏠`;
+      }
+
+    } else if (toolUse && toolUse.name === 'build_stat_holiday_plan') {
+      const { holiday_date, holiday_name } = toolUse.input;
+      console.log(`[STAT-PLAN] Building plan for ${holiday_name} (${holiday_date})`);
+
+      try {
+        // Fetch jobs and client preferences
+        const apiKey = process.env.HCP_API_KEY;
+        const start = `${holiday_date}T00:00:00Z`;
+        const end = `${holiday_date}T23:59:59Z`;
+
+        const [jobsResp, clientsResp] = await Promise.all([
+          fetch(`https://api.housecallpro.com/jobs?scheduled_start_min=${start}&scheduled_start_max=${end}&page_size=200`, {
+            headers: { 'Authorization': `Token ${apiKey}`, 'Accept': 'application/json' }
+          }),
+          fetch('https://lhs-knowledge-base.vercel.app/api/clients')
+        ]);
+
+        const jobsData = await jobsResp.json();
+        const clientsData = await clientsResp.json();
+        const jobs = (jobsData.jobs || []).filter(j => j.work_status !== 'pro canceled' && !j.deleted_at);
+        const clients = clientsData.clients || [];
+
+        if (jobs.length === 0) {
+          twimlReply = `No jobs scheduled on ${holiday_name} (${holiday_date}). Nothing to reschedule! — LHS 🏠`;
+        } else {
+          // Build client lookup
+          const clientLookup = {};
+          for (const c of clients) clientLookup[c.name.toLowerCase()] = c;
+
+          // Analyze each job
+          const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+          const holidayDow = new Date(holiday_date + 'T12:00:00Z').getUTCDay();
+
+          let msg = `📋 Rescheduling plan for ${holiday_name} (${holiday_date}):\n\n`;
+          let lockedCount = 0;
+          let flexCount = 0;
+
+          for (const job of jobs) {
+            const custName = `${job.customer?.first_name || ''} ${job.customer?.last_name || ''}`.trim();
+            const employees = (job.assigned_employees || []).map(e => `${e.first_name} ${e.last_name}`).join(', ') || 'Unassigned';
+            const prefs = clientLookup[custName.toLowerCase()];
+            const isCommercial = prefs?.client_type === 'Commercial';
+
+            if (isCommercial) {
+              lockedCount++;
+              msg += `🔒 ${custName} (Commercial) — ${employees}\n   LOCKED: Needs your decision\n`;
+            } else {
+              flexCount++;
+              // Suggest nearest day: day before or after the holiday
+              const beforeDate = new Date(holiday_date + 'T12:00:00Z');
+              beforeDate.setDate(beforeDate.getDate() - 1);
+              const afterDate = new Date(holiday_date + 'T12:00:00Z');
+              afterDate.setDate(afterDate.getDate() + 1);
+              const suggestDate = beforeDate.getUTCDay() !== 0 ? beforeDate : afterDate; // Skip Sunday
+              const suggestStr = suggestDate.toISOString().split('T')[0];
+              const suggestDay = dayNames[suggestDate.getUTCDay()];
+
+              msg += `✅ ${custName} — ${employees}\n   Suggest: move to ${suggestDay} ${suggestStr}\n`;
+            }
+          }
+
+          msg += `\n${lockedCount} locked (need your call), ${flexCount} flexible (ready to move).\n`;
+          msg += `Reply "approve the plan" and I'll reschedule the flexible ones. Locked ones are up to you! — Aria 🏠`;
+
+          twimlReply = msg;
+        }
+      } catch (err) {
+        console.error('[STAT-PLAN] Error:', err.message);
+        twimlReply = `Sorry, I couldn't build the rescheduling plan for ${holiday_name}. Please try again! — LHS 🏠`;
       }
 
     } else {
