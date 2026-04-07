@@ -12,10 +12,7 @@ export default async function handler(req, res) {
     return res.status(500).send('Missing GMAIL_CLIENT_ID or GMAIL_CLIENT_SECRET in Vercel environment variables.');
   }
 
-  const baseUrl = process.env.VERCEL_URL
-    ? `https://${process.env.VERCEL_URL}`
-    : 'https://lhs-scheduler-proxy.vercel.app';
-  const REDIRECT_URI = `${baseUrl}/api/gmail-auth`;
+  const REDIRECT_URI = 'https://lhs-scheduler-proxy.vercel.app/api/gmail-auth';
 
   const SCOPES = [
     'https://www.googleapis.com/auth/gmail.readonly',
