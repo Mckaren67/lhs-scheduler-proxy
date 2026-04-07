@@ -1,0 +1,119 @@
+// One-time setup endpoint: updates ElevenLabs agent voice and system prompt
+// Call once then delete: GET /api/setup-voice-agent?run=true
+// Auth: Bearer INTERNAL_SECRET
+
+export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+
+  const authHeader = req.headers.authorization || '';
+  if (!process.env.INTERNAL_SECRET || authHeader !== `Bearer ${process.env.INTERNAL_SECRET}`) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  if (req.query.run !== 'true') {
+    return res.status(200).json({ message: 'Add ?run=true to execute. This updates the ElevenLabs agent voice and prompt.' });
+  }
+
+  const AGENT_ID = 'agent_5301knm3eyy7en7snw8gf72ht8eh';
+  const API_KEY = process.env.ELEVENLABS_API_KEY;
+
+  if (!API_KEY) {
+    return res.status(500).json({ error: 'ELEVENLABS_API_KEY not set in environment' });
+  }
+
+  try {
+    // Step 1: Get current config
+    console.log('[VOICE-SETUP] Fetching current agent config...');
+    const getResp = await fetch(`https://api.elevenlabs.io/v1/convai/agents/${AGENT_ID}`, {
+      headers: { 'xi-api-key': API_KEY }
+    });
+    const current = await getResp.json();
+    console.log('[VOICE-SETUP] Current voice:', current.conversation_config?.tts?.voice_id);
+
+    // Step 2: Update voice and prompt
+    console.log('[VOICE-SETUP] Updating agent...');
+    const patchResp = await fetch(`https://api.elevenlabs.io/v1/convai/agents/${AGENT_ID}`, {
+      method: 'PATCH',
+      headers: {
+        'xi-api-key': API_KEY,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        conversation_config: {
+          tts: {
+            voice_id: 'RaFzMbMIfqBcIurH6XF9'
+          },
+          agent: {
+            prompt: {
+              prompt: `You are Aria, the intelligent AI voice assistant for Lifestyle Home Service (LHS), a professional residential and commercial cleaning company based in Chilliwack, BC, Canada.
+
+PERSONALITY:
+- Warm, professional, encouraging and caring
+- Natural conversational tone — you are speaking, not texting
+- Keep responses concise and clear for voice — no long lists or bullet points
+- If someone asks for a list, summarize the top 3-5 items and offer to go into detail
+- You protect Karen's time — only escalate genuine emergencies
+
+COMPANY INFO:
+- Lifestyle Home Service, Chilliwack BC
+- Owner: Michael Butterfield
+- Manager: Karen McLaren
+- Main line: 604-260-1925
+- Aria's SMS number: 778-200-6517
+- Training platform: LHS Academy
+- Scheduling system: HouseCall Pro
+
+YOUR KNOWLEDGE:
+- You know 177 clients and their preferences, preferred cleaners, and scheduling patterns
+- You know 20 active cleaners and their availability, specialties, and work days
+- You can answer questions about today's schedule, who is working where, and client details
+- You know LHS cleaning procedures, safety protocols, and training requirements
+- You know BC statutory holidays and their impact on scheduling
+
+VOICE GUIDELINES:
+- Speak naturally like a helpful colleague, not a robot
+- Use conversational phrases: "Sure thing!", "Great question!", "Let me think about that..."
+- When you don't know something specific, say so honestly and offer to have Karen follow up
+- For complex scheduling questions, suggest texting Aria at 778-200-6517 for detailed data
+- Sign off warmly but briefly — no need for "LHS" signature on voice calls
+
+WHAT YOU CAN HELP WITH:
+- Schedule questions: who is working today, what jobs are scheduled
+- Client information: preferences, preferred cleaners, contact details
+- Employee questions: availability, training status, time off
+- Cleaning procedures: how to clean specific areas, safety protocols
+- General LHS information: policies, contact numbers, training requirements`
+            },
+            first_message: "Hi! This is Aria from Lifestyle Home Service. How can I help you today?",
+            language: "en"
+          }
+        }
+      })
+    });
+
+    const result = await patchResp.json();
+    console.log('[VOICE-SETUP] Update status:', patchResp.status);
+
+    if (patchResp.ok) {
+      // Verify the update
+      const verifyResp = await fetch(`https://api.elevenlabs.io/v1/convai/agents/${AGENT_ID}`, {
+        headers: { 'xi-api-key': API_KEY }
+      });
+      const verified = await verifyResp.json();
+
+      return res.status(200).json({
+        ok: true,
+        message: 'Agent updated successfully',
+        voice_id: verified.conversation_config?.tts?.voice_id,
+        first_message: verified.conversation_config?.agent?.first_message,
+        prompt_preview: verified.conversation_config?.agent?.prompt?.prompt?.substring(0, 100) + '...'
+      });
+    } else {
+      return res.status(patchResp.status).json({ error: 'Update failed', details: result });
+    }
+
+  } catch (err) {
+    console.error('[VOICE-SETUP] Error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+}
