@@ -4,6 +4,8 @@ import { saveTask, completeTask, searchTasks, getOpenTasks, getOverdueTasks } fr
 import { getCapacityData } from './capacity-check.js';
 import { saveConversation, saveLearning, buildCallerContext } from './aria-memory.js';
 import { analyzeSchedule } from './scheduling-intelligence.js';
+import { sendEmail, saveDraft, lookupClientEmail, isSensitiveTopic } from './aria-email.js';
+import { makeCall, lookupClientPhone } from './aria-call.js';
 
 async function sendSMSNotification(to, message) {
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
@@ -611,6 +613,18 @@ save_learning: Use PROACTIVELY when you discover new information during a conver
   Karen says "Valley Toyota wants biweekly instead of weekly" → save_learning about Valley Toyota
   You don't need to ask permission — just save it and confirm: "Noted! I'll remember that Hans Claus switched to Wednesdays."
 
+send_email: Use when Karen says "email", "send an email", or "write to" someone. Rules:
+  ROUTINE (auto-send): appointment confirmations, schedule updates, thank-you notes, general info
+  SENSITIVE (draft only): complaints, pricing changes, cancellations, refunds, legal, bad news
+  Always write in Karen's warm professional voice. If you don't have the email address, look it up from HCP.
+  After sending: "Done! I emailed [name] about [topic]. — LHS"
+  After drafting: "I've saved a draft email to [name] about [topic]. Please review in Gmail before sending. — LHS"
+
+call_client: Use when Karen says "call [person]", "phone [person]", or "leave a voicemail for [person]".
+  Aria makes the call via Twilio, delivers the message via voice AI, and leaves a voicemail if no answer.
+  Write the message naturally — conversational, warm, professional. Not robotic.
+  After calling: "Done! I called [name] and [delivered the message / left a voicemail]. — LHS"
+
 get_schedule_intelligence: Use when Karen asks about the schedule, asks "how's the week looking", or when you want to proactively flag issues. Examples:
   "how's next week looking?" → get_schedule_intelligence
   "any scheduling issues?" → get_schedule_intelligence
@@ -772,6 +786,31 @@ CATEGORY ASSIGNMENT — choose the most specific match:
           fact: { type: 'string', description: 'The new fact or information learned' }
         },
         required: ['subject', 'category', 'fact']
+      }
+    }, {
+      name: 'send_email',
+      description: 'Send or draft an email on Karen\'s behalf. Use when Karen says "email [client] about [topic]" or "send an email to [person]". For routine emails (confirmations, reminders, scheduling updates) — sends automatically. For sensitive topics (complaints, pricing, cancellations) — saves as draft for Karen to review.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          client_name: { type: 'string', description: 'Client or recipient name to look up email from HCP' },
+          to_email: { type: 'string', description: 'Email address if known (overrides client lookup)' },
+          subject: { type: 'string', description: 'Email subject line' },
+          body: { type: 'string', description: 'Email body — write in Karen\'s warm professional voice' },
+          force_draft: { type: 'boolean', description: 'Set true to force save as draft even if topic seems routine' }
+        },
+        required: ['subject', 'body']
+      }
+    }, {
+      name: 'call_client',
+      description: 'Make an outbound phone call to a client or cleaner. Aria calls them, delivers the message via voice AI, and leaves a voicemail if no answer. Use when Karen says "call [person]" or "leave a voicemail for [person]".',
+      input_schema: {
+        type: 'object',
+        properties: {
+          client_name: { type: 'string', description: 'Name of the person to call — will look up phone from HCP' },
+          message: { type: 'string', description: 'The message to deliver — natural conversational tone' }
+        },
+        required: ['client_name', 'message']
       }
     }, {
       name: 'get_schedule_intelligence',
@@ -1173,6 +1212,54 @@ CATEGORY ASSIGNMENT — choose the most specific match:
       } catch (err) {
         console.error('[MEMORY] Save learning failed:', err.message);
         twimlReply = `Got it, though I had trouble saving that note. I'll keep it in mind for this conversation. — LHS 🏠`;
+      }
+
+    } else if (toolUse && toolUse.name === 'send_email') {
+      const { client_name, to_email, subject, body, force_draft } = toolUse.input;
+      console.log(`[EMAIL] Tool: ${client_name || to_email} — "${subject}"`);
+
+      try {
+        // Resolve email address
+        let email = to_email;
+        if (!email && client_name) {
+          email = await lookupClientEmail(client_name);
+        }
+        if (!email) {
+          twimlReply = `I couldn't find an email address for ${client_name || 'that contact'}. Can you give me the email? — LHS 🏠`;
+        } else {
+          const sensitive = force_draft || isSensitiveTopic(subject, body);
+          if (sensitive) {
+            await saveDraft({ to: email, subject, body });
+            twimlReply = `I've saved a draft email to ${client_name || email} about "${subject}". Please review in your Gmail drafts before sending. — LHS 🏠`;
+          } else {
+            await sendEmail({ to: email, subject, body });
+            twimlReply = `Done! I emailed ${client_name || email} about "${subject}". — LHS 🏠`;
+          }
+        }
+      } catch (err) {
+        console.error('[EMAIL] Failed:', err.message);
+        twimlReply = `Sorry, I couldn't send that email. Error: ${err.message.substring(0, 80)}. — LHS 🏠`;
+      }
+
+    } else if (toolUse && toolUse.name === 'call_client') {
+      const { client_name, message } = toolUse.input;
+      console.log(`[CALL] Tool: calling ${client_name}`);
+
+      try {
+        const phone = await lookupClientPhone(client_name);
+        if (!phone) {
+          twimlReply = `I couldn't find a phone number for ${client_name} in HouseCall Pro. Can you give me their number? — LHS 🏠`;
+        } else {
+          const result = await makeCall({ to: phone, message, callerName: client_name });
+          if (result.called) {
+            twimlReply = `Done! I'm calling ${client_name} now to deliver your message. I'll leave a voicemail if they don't answer. — LHS 🏠`;
+          } else {
+            twimlReply = `Sorry, I couldn't reach ${client_name}: ${result.error}. — LHS 🏠`;
+          }
+        }
+      } catch (err) {
+        console.error('[CALL] Failed:', err.message);
+        twimlReply = `Sorry, the call to ${client_name} failed. — LHS 🏠`;
       }
 
     } else if (toolUse && toolUse.name === 'get_schedule_intelligence') {

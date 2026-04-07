@@ -220,6 +220,49 @@ TOOLS AVAILABLE:
                   required: ["description"]
                 }
               }
+            },
+            {
+              type: "webhook",
+              name: "send_email",
+              description: "Send or draft an email on Karen's behalf. For routine topics (confirmations, reminders) sends automatically. For sensitive topics (complaints, pricing) saves as draft. Use when Karen asks to email someone.",
+              api_schema: {
+                url: "https://lhs-scheduler-proxy.vercel.app/api/aria-email?action=send",
+                method: "POST",
+                headers: {
+                  "Authorization": `Bearer ${process.env.INTERNAL_SECRET}`,
+                  "Content-Type": "application/json"
+                },
+                request_body: {
+                  type: "object",
+                  properties: {
+                    to: { type: "string", description: "Recipient email address" },
+                    subject: { type: "string", description: "Email subject" },
+                    body: { type: "string", description: "Email body in Karen's voice" }
+                  },
+                  required: ["to", "subject", "body"]
+                }
+              }
+            },
+            {
+              type: "webhook",
+              name: "call_client",
+              description: "Make an outbound phone call to a client or cleaner. Delivers a message via voice AI and leaves voicemail if no answer. Use when Karen asks to call someone or leave a voicemail.",
+              api_schema: {
+                url: "https://lhs-scheduler-proxy.vercel.app/api/aria-call?action=call",
+                method: "POST",
+                headers: {
+                  "Authorization": `Bearer ${process.env.INTERNAL_SECRET}`,
+                  "Content-Type": "application/json"
+                },
+                request_body: {
+                  type: "object",
+                  properties: {
+                    clientName: { type: "string", description: "Name of person to call" },
+                    message: { type: "string", description: "Message to deliver" }
+                  },
+                  required: ["clientName", "message"]
+                }
+              }
             }
           ]
         }
