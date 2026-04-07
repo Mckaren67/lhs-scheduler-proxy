@@ -1,5 +1,6 @@
 export const config = { api: { bodyParser: true }, maxDuration: 60 };
 import { executeBulkNotes } from './bulk-job-notes.js';
+import { saveTask, completeTask, searchTasks, getOpenTasks, getOverdueTasks } from './task-store.js';
 
 // Multi-turn conversation memory
 // Stores last 10 messages per phone number, expires after 2 hours of inactivity
@@ -494,7 +495,46 @@ Always be warm, helpful, knowledgeable and professional. You ARE Lifestyle Home 
   + (isAdmin ? `
 
 ADMIN CAPABILITIES (you are texting with Karen or another admin):
-You can add notes to client jobs in HouseCall Pro. When asked to add a note to a client's jobs, use the add_job_note tool. If the client name is unclear, ask for clarification first.` : '');
+
+JOB NOTES: Use the add_job_note tool when asked to add a note to a client's jobs. If the client name is unclear, ask for clarification first.
+
+TASK MANAGEMENT — You are Karen's digital chief of staff. Use these tools:
+
+save_task: Use when Karen mentions ANY task, follow-up, reminder, or to-do. Examples:
+  "follow up with Ladda on Thursday" → save_task
+  "need to call Tannis about pricing" → save_task
+  "remind me to order supplies" → save_task
+  "check Brandi's training progress" → save_task
+  Be proactive — if it sounds like something Karen needs to remember, save it without asking.
+  Respond warmly: "Got it! I've saved 'Follow up with Ladda' for Thursday. I'll remind you! — LHS 🏠"
+
+complete_task: Use when Karen says something is done, finished, handled, paid, or completed. Examples:
+  "done - paid Vanessa" → complete_task with search_query "paid Vanessa"
+  "Ladda follow-up is done" → complete_task with search_query "Ladda follow-up"
+  "mark the supply order as complete" → complete_task
+  Respond warmly: "Nice work! Marked 'Pay Vanessa' as done. One less thing on your plate! ✓ — LHS 🏠"
+
+search_tasks: Use when Karen asks about tasks, what's pending, or whether something was done. Examples:
+  "did we pay Vanessa?" → search_tasks with search_query "pay Vanessa"
+  "what's on my plate?" → search_tasks with search_query "all" and status_filter "open"
+  "anything overdue?" → search_tasks with search_query "overdue"
+  "what happened with A1 Pumps?" → search_tasks with search_query "A1 Pumps"
+
+TONE: Be warm, encouraging, and personal. Karen is shifting from a paper notebook to digital — make her feel supported:
+  "You're doing great, Karen — I've got this covered for you!"
+  "That's 5 tasks done today! You're crushing it! 🎉"
+
+PRIORITY ASSIGNMENT: When saving tasks, assess priority:
+  high = overdue items, client complaints, safety issues, urgent follow-ups
+  medium = routine follow-ups, scheduling changes, training check-ins
+  low = supply orders, administrative tasks, nice-to-haves
+
+CATEGORY ASSIGNMENT:
+  client = anything about a specific client
+  staff = anything about an employee
+  scheduling = schedule changes, block-offs, availability
+  billing = payments, invoices, pricing
+  admin = supplies, training setup, general business` : '');
 
   try {
     // Get or create conversation history for this phone number
@@ -520,6 +560,43 @@ You can add notes to client jobs in HouseCall Pro. When asked to add a note to a
           range_days: { type: 'number', description: 'How many days of jobs to update: 1 for today only, 7 for this week, 90 for all future jobs. Default 90.' }
         },
         required: ['client', 'note']
+      }
+    }, {
+      name: 'save_task',
+      description: 'Save a task, follow-up, reminder, or to-do for Karen. Use whenever she mentions something she needs to do, follow up on, or remember.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          description: { type: 'string', description: 'Clear description of the task (e.g. "Follow up with Ladda about interview")' },
+          priority: { type: 'string', enum: ['high', 'medium', 'low'], description: 'Task priority' },
+          category: { type: 'string', enum: ['client', 'staff', 'admin', 'billing', 'scheduling'], description: 'Task category' },
+          due_date: { type: 'string', description: 'Due date in YYYY-MM-DD format, or null if no specific date' },
+          assigned_to: { type: 'string', enum: ['karen', 'aria'], description: 'Who handles this. Default karen.' },
+          estimated_time_minutes: { type: 'number', description: 'Estimated minutes to complete' },
+          notes: { type: 'string', description: 'Additional context or details' }
+        },
+        required: ['description', 'priority', 'category']
+      }
+    }, {
+      name: 'complete_task',
+      description: 'Mark a task as completed. Use when Karen says something is done, finished, handled, paid, or completed.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          search_query: { type: 'string', description: 'Keywords to find the matching task (e.g. "pay Vanessa", "Ladda follow-up")' }
+        },
+        required: ['search_query']
+      }
+    }, {
+      name: 'search_tasks',
+      description: 'Search tasks by keyword. Use when Karen asks about tasks, what is pending, whether something was done, or wants to see her task list.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          search_query: { type: 'string', description: 'Keywords to search for. Use "all" to list all open tasks, "overdue" for overdue items.' },
+          status_filter: { type: 'string', enum: ['open', 'completed', 'all'], description: 'Filter by status. Default: all.' }
+        },
+        required: ['search_query']
       }
     }] : [];
 
@@ -582,6 +659,92 @@ You can add notes to client jobs in HouseCall Pro. When asked to add a note to a
         console.error('[BULK-NOTES] Execution failed:', err.message);
         twimlReply = `Sorry, something went wrong adding notes for ${client}. Please try again. — LHS 🏠`;
       }
+    } else if (toolUse && toolUse.name === 'save_task') {
+      const { description, priority, category, due_date, assigned_to, estimated_time_minutes, notes } = toolUse.input;
+      console.log(`[TASKS] Save tool: "${description}" (${priority}, ${category}, due: ${due_date || 'none'})`);
+
+      try {
+        const task = await saveTask({
+          description,
+          priority: priority || 'medium',
+          category: category || 'admin',
+          due_date: due_date || null,
+          assigned_to: assigned_to || 'karen',
+          estimated_time_minutes: estimated_time_minutes || null,
+          notes: notes || '',
+          source_message: incomingMessage
+        });
+
+        twimlReply = textBlock?.text?.trim() ||
+          `Got it! I've saved "${description}"${due_date ? ` for ${due_date}` : ''}. I'll keep track of this for you! — LHS 🏠`;
+      } catch (err) {
+        console.error('[TASKS] Save failed:', err.message);
+        twimlReply = `Sorry, I couldn't save that task. Please try again! — LHS 🏠`;
+      }
+
+    } else if (toolUse && toolUse.name === 'complete_task') {
+      const { search_query } = toolUse.input;
+      console.log(`[TASKS] Complete tool: searching for "${search_query}"`);
+
+      try {
+        const results = await searchTasks(search_query, 'open');
+
+        if (results.length === 0) {
+          // Check if already completed
+          const allResults = await searchTasks(search_query, 'completed');
+          if (allResults.length > 0) {
+            const t = allResults[0];
+            const completedDate = t.completed_at ? new Date(t.completed_at).toLocaleDateString('en-CA', { timeZone: 'America/Vancouver' }) : 'earlier';
+            twimlReply = `That one's already done! "${t.description}" was completed on ${completedDate}. — LHS 🏠`;
+          } else {
+            twimlReply = textBlock?.text?.trim() ||
+              `I couldn't find an open task matching "${search_query}". Could you try different keywords? — LHS 🏠`;
+          }
+        } else {
+          const task = await completeTask(results[0].id);
+          const openCount = (await getOpenTasks()).length;
+          twimlReply = textBlock?.text?.trim() ||
+            `Nice work! Marked "${task.description}" as done. ✓ You have ${openCount} task${openCount !== 1 ? 's' : ''} remaining. — LHS 🏠`;
+        }
+      } catch (err) {
+        console.error('[TASKS] Complete failed:', err.message);
+        twimlReply = `Sorry, something went wrong completing that task. Please try again! — LHS 🏠`;
+      }
+
+    } else if (toolUse && toolUse.name === 'search_tasks') {
+      const { search_query, status_filter } = toolUse.input;
+      console.log(`[TASKS] Search tool: "${search_query}" (filter: ${status_filter || 'all'})`);
+
+      try {
+        let results;
+        if (search_query === 'overdue') {
+          results = await getOverdueTasks();
+        } else if (search_query === 'all') {
+          results = await getOpenTasks();
+        } else {
+          results = await searchTasks(search_query, status_filter || 'all');
+        }
+
+        if (results.length === 0) {
+          twimlReply = textBlock?.text?.trim() ||
+            `Nothing found for "${search_query}". Your slate is clean! — LHS 🏠`;
+        } else {
+          const shown = results.slice(0, 5);
+          const lines = shown.map(t => {
+            const status = t.status === 'completed' ? '✓' : (t.due_date && t.due_date < new Date().toLocaleDateString('en-CA', { timeZone: 'America/Vancouver' }) ? '⚠️' : '○');
+            const due = t.due_date ? ` (${t.due_date})` : '';
+            return `${status} ${t.description}${due}`;
+          });
+          let msg = lines.join('\n');
+          if (results.length > 5) msg += `\n...and ${results.length - 5} more`;
+          msg += ' — LHS 🏠';
+          twimlReply = msg;
+        }
+      } catch (err) {
+        console.error('[TASKS] Search failed:', err.message);
+        twimlReply = `Sorry, I couldn't search tasks right now. Please try again! — LHS 🏠`;
+      }
+
     } else {
       // Normal text response (no tool call)
       twimlReply = textBlock?.text || claudeData.content?.[0]?.text ||
