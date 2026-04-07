@@ -177,6 +177,49 @@ TOOLS AVAILABLE:
                   required: ["subject", "fact"]
                 }
               }
+            },
+            {
+              type: "webhook",
+              name: "get_task_list",
+              description: "Get Karen's current open tasks with priorities. Use when she asks what's on her plate, what needs doing, or about specific tasks.",
+              api_schema: {
+                url: "https://lhs-scheduler-proxy.vercel.app/api/voice-data?action=task_list",
+                method: "GET",
+                headers: { "Authorization": `Bearer ${process.env.INTERNAL_SECRET}` }
+              }
+            },
+            {
+              type: "webhook",
+              name: "get_capacity",
+              description: "Get workforce capacity percentage, trend, and hiring recommendation. Use when asked about staffing, workload, whether to hire, or to proactively mention capacity in conversation.",
+              api_schema: {
+                url: "https://lhs-scheduler-proxy.vercel.app/api/voice-data?action=capacity",
+                method: "GET",
+                headers: { "Authorization": `Bearer ${process.env.INTERNAL_SECRET}` }
+              }
+            },
+            {
+              type: "webhook",
+              name: "add_task",
+              description: "Add a task directly from the voice conversation. Use when Karen mentions something she needs to do or when you proactively suggest a task and she agrees.",
+              api_schema: {
+                url: "https://lhs-scheduler-proxy.vercel.app/api/voice-data?action=add_task",
+                method: "POST",
+                headers: {
+                  "Authorization": `Bearer ${process.env.INTERNAL_SECRET}`,
+                  "Content-Type": "application/json"
+                },
+                request_body: {
+                  type: "object",
+                  properties: {
+                    description: { type: "string", description: "Task description" },
+                    priority: { type: "string", description: "high, medium, or low" },
+                    category: { type: "string", description: "Task category" },
+                    due_date: { type: "string", description: "YYYY-MM-DD format" }
+                  },
+                  required: ["description"]
+                }
+              }
             }
           ]
         }

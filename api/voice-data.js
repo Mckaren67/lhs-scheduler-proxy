@@ -168,7 +168,54 @@ export default async function handler(req, res) {
       return res.status(200).json({ text, results });
     }
 
-    return res.status(400).json({ error: 'Unknown action. Use: live_data, caller_history, save_learning, search_knowledge' });
+    // get_task_list — Karen's open tasks with priorities
+    if (action === 'task_list') {
+      const tasks = await getOpenTasks();
+      const overdue = await getOverdueTasks();
+      if (tasks.length === 0) return res.status(200).json({ text: 'No open tasks right now. Your slate is clean!' });
+
+      let text = `Karen has ${tasks.length} open task${tasks.length !== 1 ? 's' : ''}.`;
+      if (overdue.length > 0) text += ` ${overdue.length} overdue!`;
+      text += '\n\nTop priorities:\n';
+      for (const t of tasks.slice(0, 8)) {
+        const flag = t.due_date && t.due_date < new Date().toLocaleDateString('en-CA', { timeZone: TIMEZONE }) ? ' OVERDUE' : '';
+        text += `• ${t.description}${t.due_date ? ' (due ' + t.due_date + ')' : ''}${flag}\n`;
+      }
+      if (tasks.length > 8) text += `...and ${tasks.length - 8} more.\n`;
+      return res.status(200).json({ text, total: tasks.length, overdueCount: overdue.length });
+    }
+
+    // get_capacity — workforce capacity and trend
+    if (action === 'capacity') {
+      try {
+        const cap = await getCapacityData();
+        const trendStr = cap.trend > 0 ? `up ${cap.trend}% from last week` : cap.trend < 0 ? `down ${Math.abs(cap.trend)}% from last week` : 'flat from last week';
+        let text = `Workforce is at ${cap.capacity}% capacity. ${cap.bookedHours} hours booked out of ${cap.availableHours} available across ${cap.cleanerCount} cleaners. Trend: ${trendStr}.`;
+        if (cap.weeksUntilFull) text += ` At this pace, we'll be at full capacity in about ${cap.weeksUntilFull} weeks.`;
+        if (cap.capacity >= 90) text += ' This is urgent — we need to hire immediately.';
+        else if (cap.capacity >= 80) text += ' I recommend starting the hiring process this week.';
+        else if (cap.capacity >= 70) text += ' Good time to start thinking about hiring.';
+        return res.status(200).json({ text, ...cap });
+      } catch (e) {
+        return res.status(200).json({ text: 'Could not load capacity data right now.' });
+      }
+    }
+
+    // add_task — save a task from voice conversation
+    if (action === 'add_task' && req.method === 'POST') {
+      const { saveTask } = await import('./task-store.js');
+      const task = await saveTask({
+        description: req.body.description || 'Task from voice call',
+        priority: req.body.priority || 'medium',
+        category: req.body.category || 'administrative',
+        due_date: req.body.due_date || null,
+        assigned_to: 'karen',
+        source_message: 'Voice conversation with Aria'
+      });
+      return res.status(201).json({ text: `Got it! I've saved "${task.description}" as a task.`, task });
+    }
+
+    return res.status(400).json({ error: 'Unknown action. Use: live_data, task_list, capacity, caller_history, save_learning, search_knowledge, add_task' });
 
   } catch (err) {
     console.error('[VOICE-DATA] Error:', err.message);

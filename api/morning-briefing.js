@@ -94,18 +94,42 @@ export default async function handler(req, res) {
       msg += `Estimated time saved: ${timeStr} ⏱️\n`;
     }
 
-    // On Mondays, add capacity stats
-    if (dayName === 'Monday') {
-      try {
-        const cap = await getCapacityData();
+    // Capacity — daily if 70%+, Mondays always
+    try {
+      const cap = await getCapacityData();
+      if (cap.capacity >= 70 || dayName === 'Monday') {
         const trendStr = cap.trend > 0 ? `up ${cap.trend}%` : cap.trend < 0 ? `down ${Math.abs(cap.trend)}%` : 'flat';
-        msg += `\n📊 Workforce: ${cap.capacity}% capacity (${trendStr} from last week)\n`;
-        if (cap.weeksUntilFull) {
-          msg += `~${cap.weeksUntilFull} week${cap.weeksUntilFull !== 1 ? 's' : ''} to full capacity at current pace\n`;
+        if (cap.capacity >= 90) {
+          msg += `\n🔴 URGENT: Workforce at ${cap.capacity}% — we need to hire immediately!\n`;
+        } else if (cap.capacity >= 80) {
+          msg += `\n🟠 Workforce at ${cap.capacity}% — I recommend starting hiring this week.\n`;
+        } else if (cap.capacity >= 70) {
+          msg += `\n🟡 Workforce at ${cap.capacity}% — good time to think about hiring.\n`;
+        } else {
+          msg += `\n📊 Workforce: ${cap.capacity}% capacity (${trendStr})\n`;
         }
-      } catch (err) {
-        console.error('[MORNING] Capacity check error:', err.message);
       }
+    } catch (err) {
+      console.error('[MORNING] Capacity check error:', err.message);
+    }
+
+    // Stat holiday advance warning (3 weeks)
+    const STAT_HOLIDAYS = [
+      { date: '2026-05-18', name: 'Victoria Day' }, { date: '2026-06-21', name: 'Indigenous Peoples Day' },
+      { date: '2026-07-01', name: 'Canada Day' }, { date: '2026-08-03', name: 'BC Day' },
+      { date: '2026-09-07', name: 'Labour Day' }, { date: '2026-09-30', name: 'Truth & Reconciliation' },
+      { date: '2026-10-12', name: 'Thanksgiving' }, { date: '2026-11-11', name: 'Remembrance Day' },
+      { date: '2026-12-25', name: 'Christmas Day' }, { date: '2026-12-26', name: 'Boxing Day' }
+    ];
+    const todayISO = now.toLocaleDateString('en-CA', { timeZone: 'America/Vancouver' });
+    const cutoff21 = new Date(now); cutoff21.setDate(cutoff21.getDate() + 21);
+    const upcoming = STAT_HOLIDAYS.find(h => h.date >= todayISO && h.date <= cutoff21.toISOString().split('T')[0]);
+    if (upcoming) {
+      const daysUntil = Math.ceil((new Date(upcoming.date) - now) / 86400000);
+      msg += `\n📅 ${upcoming.name} is ${daysUntil} days away (${upcoming.date}). Want me to review the schedule?\n`;
+    }
+
+    {
     }
 
     msg += `\nHave a great day! — Aria 🏠`;

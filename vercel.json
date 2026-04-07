@@ -3,6 +3,10 @@
     {
       "path": "/api/morning-briefing",
       "schedule": "0 14 * * *"
+    },
+    {
+      "path": "/api/afternoon-briefing",
+      "schedule": "30 22 * * *"
     }
   ]
 }
