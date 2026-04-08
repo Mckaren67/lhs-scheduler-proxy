@@ -3,6 +3,7 @@ export const config = { api: { bodyParser: false }, maxDuration: 30 };
 import { getMorningBriefingData } from './task-store.js';
 import { getCapacityData } from './capacity-check.js';
 import { getSickDayBriefing } from './sick-day-log.js';
+import { makeCall } from './aria-call.js';
 
 const KAREN_PHONE = '+16048009630';
 
@@ -152,7 +153,28 @@ export default async function handler(req, res) {
     msg += `\nHave a great day! — Aria 🏠`;
 
     const result = await sendSMS(KAREN_PHONE, msg);
-    console.log(`[MORNING] Briefing sent:`, result.sid ? `SID ${result.sid}` : 'failed');
+    console.log(`[MORNING] SMS sent:`, result.sid ? `SID ${result.sid}` : 'failed');
+
+    // Make outbound morning call to Karen via Twilio
+    let callResult = null;
+    try {
+      // Build a concise voice message from the briefing data
+      let voiceMsg = `Good morning Karen! It's Aria with your daily briefing. `;
+      voiceMsg += `You have ${jobCount} jobs on the schedule today. `;
+      if (briefing.overdueCount > 0) voiceMsg += `${briefing.overdueCount} tasks are overdue and need attention. `;
+      if (briefing.topFollowUps.length > 0) {
+        voiceMsg += `Your top priority today is ${briefing.topFollowUps[0].description}. `;
+      }
+      if (briefing.delegatedToAria.length > 0) {
+        voiceMsg += `I'm handling ${briefing.delegatedToAria.length} tasks for you automatically. `;
+      }
+      voiceMsg += `I also sent you the full details by text. Have an amazing day Karen! Text me anytime if you need anything.`;
+
+      callResult = await makeCall({ to: KAREN_PHONE, message: voiceMsg, callerName: 'Karen' });
+      console.log(`[MORNING] Call initiated:`, callResult.called ? `SID ${callResult.callSid}` : callResult.error);
+    } catch (callErr) {
+      console.error('[MORNING] Call failed:', callErr.message);
+    }
 
     // On Mondays, also trigger the stat holiday check
     let statHolidayResult = null;
@@ -184,6 +206,8 @@ export default async function handler(req, res) {
       openTasks: briefing.openCount,
       overdue: briefing.overdueCount,
       messageSid: result.sid || null,
+      callInitiated: callResult?.called || false,
+      callSid: callResult?.callSid || null,
       statHolidayCheck: statHolidayResult
     });
 

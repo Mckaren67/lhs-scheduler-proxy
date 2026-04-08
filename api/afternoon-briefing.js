@@ -1,13 +1,14 @@
-// 3:30 PM PT daily agenda email to Karen
-// Sends a formatted email with tomorrow's schedule, priorities, and what Aria handles
-// Uses Twilio SMS as delivery (Gmail OAuth not available on Vercel — email sent via scheduled task)
+// 3:30 PM PT daily agenda email + SMS to Karen
+// Sends a formatted HTML email via Gmail API AND an SMS summary via Twilio
 
 export const config = { api: { bodyParser: false }, maxDuration: 30 };
 
 import { getOpenTasks, getOverdueTasks } from './task-store.js';
 import { getCapacityData } from './capacity-check.js';
+import { sendEmail } from './aria-email.js';
 
 const KAREN_PHONE = '+16048009630';
+const KAREN_EMAIL = process.env.GMAIL_USER_EMAIL || 'karen@lifestylehomeservice.com';
 const TIMEZONE = 'America/Vancouver';
 
 // Stat holidays for advance warning
@@ -148,14 +149,62 @@ export default async function handler(req, res) {
     msg += `\nRest well tonight — I've got tomorrow covered! — Aria 🏠`;
 
     const result = await sendSMS(KAREN_PHONE, msg);
-    console.log(`[AFTERNOON] Briefing sent:`, result.sid ? `SID ${result.sid}` : 'failed');
+    console.log(`[AFTERNOON] SMS sent:`, result.sid ? `SID ${result.sid}` : 'failed');
+
+    // Also send a formatted HTML email
+    let emailSent = false;
+    try {
+      const topTasks5 = openTasks.slice(0, 5);
+      const htmlBody = `
+<div style="font-family:-apple-system,sans-serif;max-width:600px;margin:0 auto;color:#1a1a18">
+  <div style="background:#2d6a4f;color:#fff;padding:20px 24px;border-radius:10px 10px 0 0">
+    <h1 style="margin:0;font-size:22px">Our Tomorrow at LHS</h1>
+    <p style="margin:4px 0 0;opacity:0.8;font-size:14px">${tomorrowDay}, ${tomorrowDate}</p>
+  </div>
+  <div style="background:#fff;padding:24px;border:1px solid #e0e0dc;border-top:0;border-radius:0 0 10px 10px">
+    <h3 style="color:#2d6a4f;margin:0 0 8px">📅 Schedule</h3>
+    <p>${tomorrowData.count} job${tomorrowData.count !== 1 ? 's' : ''} scheduled tomorrow</p>
+
+    ${topTasks5.length > 0 ? `
+    <h3 style="color:#2d6a4f;margin:16px 0 8px">🎯 Our Top Priorities</h3>
+    <ul style="padding-left:20px">
+      ${topTasks5.map(t => `<li>${t.description}${t.due_date ? ` <span style="color:#9b9b98;font-size:12px">(${t.due_date})</span>` : ''}</li>`).join('')}
+    </ul>` : ''}
+
+    ${overdue.length > 0 ? `
+    <h3 style="color:#c0392b;margin:16px 0 8px">⚠️ Overdue</h3>
+    <p>${overdue.length} item${overdue.length !== 1 ? 's' : ''} need attention</p>` : ''}
+
+    ${capData && capData.capacity >= 70 ? `
+    <h3 style="color:#b5631a;margin:16px 0 8px">📊 Capacity</h3>
+    <p>Workforce at ${capData.capacity}%${capData.trend !== 0 ? ` (${capData.trend > 0 ? 'up' : 'down'} ${Math.abs(capData.trend)}% from last week)` : ''}</p>` : ''}
+
+    <div style="margin-top:24px;padding-top:16px;border-top:1px solid #e0e0dc;color:#6b6b68;font-size:13px">
+      <p>Rest well tonight — I've got tomorrow covered! 🏠</p>
+      <p style="margin-top:8px">— Aria, your LHS scheduling partner</p>
+    </div>
+  </div>
+</div>`;
+
+      await sendEmail({
+        to: KAREN_EMAIL,
+        subject: `Our Tomorrow at LHS — ${tomorrowDay}, ${tomorrowDate}`,
+        body: htmlBody,
+        isHtml: true
+      });
+      emailSent = true;
+      console.log('[AFTERNOON] Email sent to Karen');
+    } catch (emailErr) {
+      console.error('[AFTERNOON] Email failed:', emailErr.message);
+    }
 
     return res.status(200).json({
       ok: true,
       tomorrowJobs: tomorrowData.count,
       openTasks: openTasks.length,
       overdue: overdue.length,
-      messageSid: result.sid || null
+      messageSid: result.sid || null,
+      emailSent
     });
 
   } catch (err) {

@@ -165,19 +165,24 @@ export default async function handler(req, res) {
     const token = await getAccessToken();
     console.log('[GMAIL] Access token obtained');
 
-    // Search for unread emails, skip promotions/social/updates
+    // First check total unread count for logging
+    const allUnread = await gmailGet(token, 'messages?q=' + encodeURIComponent('is:unread') + '&maxResults=1');
+    const unreadTotal = allUnread.resultSizeEstimate || 0;
+    console.log(`[GMAIL] Total unread: ~${unreadTotal}`);
+
+    // Search for actionable unread emails — skip promotions, social, automated
     const searchResp = await gmailGet(token,
-      'messages?q=' + encodeURIComponent('is:unread -category:promotions -category:social -category:updates -category:forums -from:noreply -from:no-reply') +
+      'messages?q=' + encodeURIComponent('is:unread -category:promotions -category:social -category:updates -category:forums -from:noreply -from:no-reply -from:notifications -from:mailer-daemon -from:postmaster') +
       '&maxResults=5'
     );
 
     const messageIds = (searchResp.messages || []).map(m => m.id);
     if (messageIds.length === 0) {
-      console.log('[GMAIL] No new unread emails');
-      return res.status(200).json({ ok: true, processed: 0, message: 'No new emails' });
+      console.log(`[GMAIL] No actionable unread emails (${unreadTotal} total unread filtered out)`);
+      return res.status(200).json({ ok: true, processed: 0, totalUnread: unreadTotal, message: 'No actionable emails' });
     }
 
-    console.log(`[GMAIL] Found ${messageIds.length} unread email(s)`);
+    console.log(`[GMAIL] Found ${messageIds.length} actionable email(s) from ${unreadTotal} total unread`);
     const drafted = [];
 
     for (const msgId of messageIds) {
