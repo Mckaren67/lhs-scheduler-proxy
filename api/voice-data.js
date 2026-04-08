@@ -9,73 +9,90 @@ import { getCallerHistory, getRecentConversations, searchLearnings } from './ari
 
 const TIMEZONE = 'America/Vancouver';
 
-async function fetchTodaySchedule() {
+async function fetchSchedule() {
   try {
     const apiKey = process.env.HCP_API_KEY;
+    const hcpHeaders = { 'Authorization': `Token ${apiKey}`, 'Accept': 'application/json' };
     const now = new Date();
-    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-    const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59).toISOString();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+    const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59).toISOString();
+    const tomorrowStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString();
+    const tomorrowEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 23, 59, 59).toISOString();
 
-    // Fetch HCP jobs and KB client prefs in parallel
-    const [jobsResp, clientsResp] = await Promise.all([
-      fetch(`https://api.housecallpro.com/jobs?scheduled_start_min=${start}&scheduled_start_max=${end}&page_size=200`,
-        { headers: { 'Authorization': `Token ${apiKey}`, 'Accept': 'application/json' } }),
+    // Fetch today, tomorrow, and KB data in parallel
+    const [todayResp, tomorrowResp, clientsResp] = await Promise.all([
+      fetch(`https://api.housecallpro.com/jobs?scheduled_start_min=${todayStart}&scheduled_start_max=${todayEnd}&page_size=200`, { headers: hcpHeaders }),
+      fetch(`https://api.housecallpro.com/jobs?scheduled_start_min=${tomorrowStart}&scheduled_start_max=${tomorrowEnd}&page_size=200`, { headers: hcpHeaders }),
       fetch('https://lhs-knowledge-base.vercel.app/api/clients').catch(() => null)
     ]);
 
-    if (!jobsResp.ok) return { text: 'Could not fetch the schedule right now.', jobs: [] };
-    const jobsData = await jobsResp.json();
-    const jobs = (jobsData.jobs || []).filter(j => j.work_status !== 'pro canceled' && !j.deleted_at);
+    const todayJobs = todayResp.ok ? ((await todayResp.json()).jobs || []).filter(j => j.work_status !== 'pro canceled' && !j.deleted_at) : [];
+    const tomorrowJobs = tomorrowResp.ok ? ((await tomorrowResp.json()).jobs || []).filter(j => j.work_status !== 'pro canceled' && !j.deleted_at) : [];
 
-    // Build client preference lookup
+    // Build client lookup and cleaner roster from KB
     const clientLookup = {};
+    let cleanerRoster = [];
     if (clientsResp?.ok) {
       const clientsData = await clientsResp.json();
-      for (const c of (clientsData.clients || [])) {
-        clientLookup[c.name.toLowerCase()] = c;
-      }
+      for (const c of (clientsData.clients || [])) clientLookup[c.name.toLowerCase()] = c;
+      cleanerRoster = (clientsData.cleaners || []).filter(c => c.days && c.days.length > 0);
     }
 
-    if (jobs.length === 0) return { text: 'No jobs scheduled today.', jobs: [] };
+    // Format a job list into plain English with FULL employee names
+    function formatJobs(jobs, dayLabel) {
+      if (jobs.length === 0) return `No jobs scheduled for ${dayLabel}.`;
 
-    const inProgress = jobs.filter(j => j.work_status === 'in progress' || j.work_timestamps?.started_at);
-    const scheduled = jobs.filter(j => j.work_status === 'scheduled' && !j.work_timestamps?.started_at);
-    const completed = jobs.filter(j => j.work_status === 'complete' || j.work_status === 'complete unrated');
+      const inProgress = jobs.filter(j => j.work_status === 'in progress' || j.work_timestamps?.started_at);
+      const scheduled = jobs.filter(j => j.work_status === 'scheduled' && !j.work_timestamps?.started_at);
+      const completed = jobs.filter(j => j.work_status === 'complete' || j.work_status === 'complete unrated');
+      const unassigned = jobs.filter(j => !j.assigned_employees || j.assigned_employees.length === 0);
 
-    let text = `There are ${jobs.length} jobs today. `;
-    if (inProgress.length > 0) text += `${inProgress.length} in progress. `;
-    if (scheduled.length > 0) text += `${scheduled.length} still to go. `;
-    if (completed.length > 0) text += `${completed.length} completed. `;
+      let text = `${dayLabel}: ${jobs.length} jobs. `;
+      if (inProgress.length > 0) text += `${inProgress.length} in progress. `;
+      if (scheduled.length > 0) text += `${scheduled.length} scheduled. `;
+      if (completed.length > 0) text += `${completed.length} completed. `;
+      if (unassigned.length > 0) text += `WARNING: ${unassigned.length} jobs have NO cleaner assigned! `;
 
-    text += '\n\nJob details:\n';
-    for (const job of jobs) {
-      const name = `${job.customer?.first_name || ''} ${job.customer?.last_name || ''}`.trim();
-      const employees = (job.assigned_employees || []).map(e => `${e.first_name}`).join(' and ') || 'unassigned';
-      const startTime = job.schedule?.scheduled_start
-        ? new Date(job.schedule.scheduled_start).toLocaleTimeString('en-CA', { timeZone: TIMEZONE, hour: 'numeric', minute: '2-digit' })
-        : 'no time set';
-      const addr = job.address?.street || '';
-      const city = job.address?.city || '';
-      const status = job.work_status || 'scheduled';
+      text += '\n';
+      for (const job of jobs) {
+        const clientName = `${job.customer?.first_name || ''} ${job.customer?.last_name || ''}`.trim() || 'Unknown client';
+        // FULL names — first AND last for every employee
+        const empNames = (job.assigned_employees || []).map(e => `${e.first_name} ${e.last_name}`.trim());
+        const employees = empNames.length > 0 ? empNames.join(' and ') : 'NO CLEANER ASSIGNED';
+        const startTime = job.schedule?.scheduled_start
+          ? new Date(job.schedule.scheduled_start).toLocaleTimeString('en-CA', { timeZone: TIMEZONE, hour: 'numeric', minute: '2-digit' })
+          : 'no time set';
+        const addr = job.address?.street || '';
+        const city = job.address?.city || '';
+        const status = job.work_status || 'scheduled';
 
-      // Enrich with client preferences
-      const prefs = clientLookup[name.toLowerCase()];
-      let prefNote = '';
-      if (prefs) {
-        if (prefs.priority === 'High') prefNote += ' High priority client.';
-        if (prefs.preferred_cleaner && !employees.toLowerCase().includes(prefs.preferred_cleaner.split(' ')[0].toLowerCase())) {
-          prefNote += ` Note: preferred cleaner is ${prefs.preferred_cleaner}.`;
-        }
-        if (prefs.client_type === 'Commercial') prefNote += ' Commercial account.';
+        const prefs = clientLookup[clientName.toLowerCase()];
+        let notes = '';
+        if (prefs?.priority === 'High') notes += ' HIGH PRIORITY.';
+        if (prefs?.client_type === 'Commercial') notes += ' Commercial.';
+
+        text += `- ${clientName} at ${startTime}, ${addr}${city ? ', ' + city : ''}, assigned to ${employees}, status: ${status}.${notes}\n`;
       }
-
-      text += `${name}, ${addr}${city ? ' in ' + city : ''}, at ${startTime}, assigned to ${employees}, ${status}.${prefNote} `;
+      return text;
     }
 
-    return { text, jobs };
+    const todayText = formatJobs(todayJobs, 'TODAY');
+    const tomorrowText = formatJobs(tomorrowJobs, 'TOMORROW');
+
+    // Build cleaner roster with EXACT names
+    let rosterText = '\nACTIVE CLEANER ROSTER (these are the ONLY employees — never invent names):\n';
+    for (const c of cleanerRoster) {
+      rosterText += `- ${c.name} — works ${c.days.join(', ')}`;
+      if (c.availability_note) rosterText += ` (${c.availability_note})`;
+      rosterText += '\n';
+    }
+
+    const fullText = todayText + '\n' + tomorrowText + rosterText;
+
+    return { text: fullText, todayJobs, tomorrowJobs, cleanerRoster };
   } catch (err) {
     console.error('[VOICE-DATA] Schedule error:', err.message);
-    return { text: 'Sorry, I could not load the schedule right now.', jobs: [] };
+    return { text: 'Sorry, I could not load the schedule right now. Please try again.', todayJobs: [], tomorrowJobs: [], cleanerRoster: [] };
   }
 }
 
@@ -113,7 +130,7 @@ export default async function handler(req, res) {
     // get_live_data — full real-time context for voice conversations
     if (action === 'live_data' || !action) {
       const [schedule, openTasks, flags] = await Promise.all([
-        fetchTodaySchedule(),
+        fetchSchedule(),
         getOpenTasks(),
         buildUrgentFlags()
       ]);
@@ -127,6 +144,9 @@ export default async function handler(req, res) {
         tasks: taskSummary,
         taskCount: openTasks.length,
         urgentFlags: flags,
+        todayJobCount: schedule.todayJobs?.length || 0,
+        tomorrowJobCount: schedule.tomorrowJobs?.length || 0,
+        cleanerCount: schedule.cleanerRoster?.length || 0,
         timestamp: new Date().toLocaleString('en-CA', { timeZone: TIMEZONE })
       });
     }
