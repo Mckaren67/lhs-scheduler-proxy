@@ -9,25 +9,36 @@ import { getCallerHistory, getRecentConversations, searchLearnings } from './ari
 
 const TIMEZONE = 'America/Vancouver';
 
+// ─── 28-day schedule cache (2-hour TTL) ─────────────────────────────────────
+let scheduleCache = { data: null, fetchedAt: 0 };
+const CACHE_TTL = 2 * 60 * 60 * 1000; // 2 hours
+
 async function fetchSchedule() {
+  // Return cache if fresh
+  const age = Date.now() - scheduleCache.fetchedAt;
+  if (scheduleCache.data && age < CACHE_TTL) {
+    console.log(`[VOICE-DATA] Using cached schedule (${Math.round(age/60000)}m old)`);
+    return scheduleCache.data;
+  }
+
   try {
     const apiKey = process.env.HCP_API_KEY;
     const hcpHeaders = { 'Authorization': `Token ${apiKey}`, 'Accept': 'application/json' };
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-    const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59).toISOString();
-    const tomorrowStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString();
-    const tomorrowEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 23, 59, 59).toISOString();
+    const day28End = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 28, 23, 59, 59).toISOString();
 
-    // Fetch today, tomorrow, and KB data in parallel
-    const [todayResp, tomorrowResp, clientsResp] = await Promise.all([
-      fetch(`https://api.housecallpro.com/jobs?scheduled_start_min=${todayStart}&scheduled_start_max=${todayEnd}&page_size=200`, { headers: hcpHeaders }),
-      fetch(`https://api.housecallpro.com/jobs?scheduled_start_min=${tomorrowStart}&scheduled_start_max=${tomorrowEnd}&page_size=200`, { headers: hcpHeaders }),
+    console.log('[VOICE-DATA] Fetching 28-day schedule from HCP...');
+
+    // Fetch 28 days of jobs + KB data in parallel
+    const [jobsResp, clientsResp] = await Promise.all([
+      fetch(`https://api.housecallpro.com/jobs?scheduled_start_min=${todayStart}&scheduled_start_max=${day28End}&page_size=200`, { headers: hcpHeaders }),
       fetch('https://lhs-knowledge-base.vercel.app/api/clients').catch(() => null)
     ]);
 
-    const todayJobs = todayResp.ok ? ((await todayResp.json()).jobs || []).filter(j => j.work_status !== 'pro canceled' && !j.deleted_at) : [];
-    const tomorrowJobs = tomorrowResp.ok ? ((await tomorrowResp.json()).jobs || []).filter(j => j.work_status !== 'pro canceled' && !j.deleted_at) : [];
+    const allJobs = jobsResp.ok
+      ? ((await jobsResp.json()).jobs || []).filter(j => j.work_status !== 'pro canceled' && !j.deleted_at)
+      : [];
 
     // Build client lookup and cleaner roster from KB
     const clientLookup = {};
@@ -38,61 +49,100 @@ async function fetchSchedule() {
       cleanerRoster = (clientsData.cleaners || []).filter(c => c.days && c.days.length > 0);
     }
 
-    // Format a job list into plain English with FULL employee names
-    function formatJobs(jobs, dayLabel) {
-      if (jobs.length === 0) return `No jobs scheduled for ${dayLabel}.`;
+    // Group jobs by date
+    const jobsByDate = {};
+    for (const job of allJobs) {
+      const dateStr = job.schedule?.scheduled_start
+        ? new Date(job.schedule.scheduled_start).toLocaleDateString('en-CA', { timeZone: TIMEZONE })
+        : null;
+      if (!dateStr) continue;
+      if (!jobsByDate[dateStr]) jobsByDate[dateStr] = [];
+      jobsByDate[dateStr].push(job);
+    }
+
+    // Identify today and tomorrow
+    const todayStr = now.toLocaleDateString('en-CA', { timeZone: TIMEZONE });
+    const tomorrow = new Date(now); tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowStr = tomorrow.toLocaleDateString('en-CA', { timeZone: TIMEZONE });
+    const todayJobs = jobsByDate[todayStr] || [];
+    const tomorrowJobs = jobsByDate[tomorrowStr] || [];
+
+    // Format jobs for a single day
+    function formatDayJobs(jobs, dayLabel) {
+      if (jobs.length === 0) return `${dayLabel}: No jobs scheduled.\n`;
 
       const inProgress = jobs.filter(j => j.work_status === 'in progress' || j.work_timestamps?.started_at);
       const scheduled = jobs.filter(j => j.work_status === 'scheduled' && !j.work_timestamps?.started_at);
       const completed = jobs.filter(j => j.work_status === 'complete' || j.work_status === 'complete unrated');
       const unassigned = jobs.filter(j => !j.assigned_employees || j.assigned_employees.length === 0);
 
-      let text = `${dayLabel}: ${jobs.length} jobs. `;
-      if (inProgress.length > 0) text += `${inProgress.length} in progress. `;
-      if (scheduled.length > 0) text += `${scheduled.length} scheduled. `;
-      if (completed.length > 0) text += `${completed.length} completed. `;
-      if (unassigned.length > 0) text += `WARNING: ${unassigned.length} jobs have NO cleaner assigned! `;
-
+      let text = `${dayLabel}: ${jobs.length} jobs.`;
+      if (inProgress.length > 0) text += ` ${inProgress.length} in progress.`;
+      if (scheduled.length > 0) text += ` ${scheduled.length} scheduled.`;
+      if (completed.length > 0) text += ` ${completed.length} completed.`;
+      if (unassigned.length > 0) text += ` WARNING: ${unassigned.length} UNASSIGNED!`;
       text += '\n';
+
       for (const job of jobs) {
-        const clientName = `${job.customer?.first_name || ''} ${job.customer?.last_name || ''}`.trim() || 'Unknown client';
-        // FULL names — first AND last for every employee
+        const clientName = `${job.customer?.first_name || ''} ${job.customer?.last_name || ''}`.trim() || 'Unknown';
         const empNames = (job.assigned_employees || []).map(e => `${e.first_name} ${e.last_name}`.trim());
         const employees = empNames.length > 0 ? empNames.join(' and ') : 'NO CLEANER ASSIGNED';
         const startTime = job.schedule?.scheduled_start
           ? new Date(job.schedule.scheduled_start).toLocaleTimeString('en-CA', { timeZone: TIMEZONE, hour: 'numeric', minute: '2-digit' })
-          : 'no time set';
+          : 'no time';
         const addr = job.address?.street || '';
         const city = job.address?.city || '';
         const status = job.work_status || 'scheduled';
-
         const prefs = clientLookup[clientName.toLowerCase()];
         let notes = '';
         if (prefs?.priority === 'High') notes += ' HIGH PRIORITY.';
         if (prefs?.client_type === 'Commercial') notes += ' Commercial.';
 
-        text += `- ${clientName} at ${startTime}, ${addr}${city ? ', ' + city : ''}, assigned to ${employees}, status: ${status}.${notes}\n`;
+        text += `- ${clientName} at ${startTime}, ${addr}${city ? ', ' + city : ''}, assigned to ${employees}, ${status}.${notes}\n`;
       }
       return text;
     }
 
-    const todayText = formatJobs(todayJobs, 'TODAY');
-    const tomorrowText = formatJobs(tomorrowJobs, 'TOMORROW');
+    // Build full text: today + tomorrow in detail, then weekly summaries
+    const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    let fullText = formatDayJobs(todayJobs, 'TODAY');
+    fullText += '\n' + formatDayJobs(tomorrowJobs, 'TOMORROW');
 
-    // Build cleaner roster with EXACT names
-    let rosterText = '\nACTIVE CLEANER ROSTER (these are the ONLY employees — never invent names):\n';
-    for (const c of cleanerRoster) {
-      rosterText += `- ${c.name} — works ${c.days.join(', ')}`;
-      if (c.availability_note) rosterText += ` (${c.availability_note})`;
-      rosterText += '\n';
+    // Remaining 26 days as day-by-day summaries
+    fullText += '\nUPCOMING 4 WEEKS:\n';
+    for (let i = 2; i < 28; i++) {
+      const d = new Date(now);
+      d.setDate(d.getDate() + i);
+      const dateStr = d.toLocaleDateString('en-CA', { timeZone: TIMEZONE });
+      const dayName = dayNames[d.getDay()];
+      const dateLabel = d.toLocaleDateString('en-CA', { timeZone: TIMEZONE, month: 'short', day: 'numeric' });
+      const dayJobs = jobsByDate[dateStr] || [];
+
+      if (dayJobs.length === 0) {
+        fullText += `${dayName} ${dateLabel}: No jobs.\n`;
+      } else {
+        const cleanerNames = [...new Set(dayJobs.flatMap(j => (j.assigned_employees || []).map(e => `${e.first_name} ${e.last_name}`.trim())))];
+        const clientNames = dayJobs.map(j => `${j.customer?.first_name || ''} ${j.customer?.last_name || ''}`.trim()).filter(Boolean);
+        fullText += `${dayName} ${dateLabel}: ${dayJobs.length} jobs. Cleaners: ${cleanerNames.join(', ') || 'none'}. Clients: ${clientNames.slice(0, 5).join(', ')}${clientNames.length > 5 ? ` +${clientNames.length - 5} more` : ''}.\n`;
+      }
     }
 
-    const fullText = todayText + '\n' + tomorrowText + rosterText;
+    // Cleaner roster
+    fullText += '\nACTIVE CLEANER ROSTER (these are the ONLY employees — never invent names):\n';
+    for (const c of cleanerRoster) {
+      fullText += `- ${c.name} — works ${c.days.join(', ')}`;
+      if (c.availability_note) fullText += ` (${c.availability_note})`;
+      fullText += '\n';
+    }
 
-    return { text: fullText, todayJobs, tomorrowJobs, cleanerRoster };
+    console.log(`[VOICE-DATA] Fetched ${allJobs.length} jobs over 28 days, ${Object.keys(jobsByDate).length} active days, ${cleanerRoster.length} cleaners`);
+
+    const result = { text: fullText, todayJobs, tomorrowJobs, allJobs, jobsByDate, cleanerRoster };
+    scheduleCache = { data: result, fetchedAt: Date.now() };
+    return result;
   } catch (err) {
     console.error('[VOICE-DATA] Schedule error:', err.message);
-    return { text: 'Sorry, I could not load the schedule right now. Please try again.', todayJobs: [], tomorrowJobs: [], cleanerRoster: [] };
+    return { text: 'Sorry, I could not load the schedule right now. Please try again.', todayJobs: [], tomorrowJobs: [], allJobs: [], jobsByDate: {}, cleanerRoster: [] };
   }
 }
 
@@ -146,7 +196,10 @@ export default async function handler(req, res) {
         urgentFlags: flags,
         todayJobCount: schedule.todayJobs?.length || 0,
         tomorrowJobCount: schedule.tomorrowJobs?.length || 0,
+        totalJobs28Days: schedule.allJobs?.length || 0,
+        activeDays: Object.keys(schedule.jobsByDate || {}).length,
         cleanerCount: schedule.cleanerRoster?.length || 0,
+        cached: Date.now() - scheduleCache.fetchedAt < CACHE_TTL,
         timestamp: new Date().toLocaleString('en-CA', { timeZone: TIMEZONE })
       });
     }
