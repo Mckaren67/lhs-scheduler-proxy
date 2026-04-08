@@ -1,18 +1,15 @@
-// Real-time data endpoint for ElevenLabs voice agent tools
-// Returns schedule, tasks, flags in plain conversational English
+// Voice data endpoint for ElevenLabs agent tools
+// DESIGNED FOR SPEED — live_data reads from pre-built cache only
+// Heavy modules (task-store, capacity-check, aria-memory) are lazy-imported
+// only when their specific actions are requested, NOT on cold start
 
-export const config = { api: { bodyParser: true }, maxDuration: 15 };
-
-import { getOpenTasks, getOverdueTasks } from './task-store.js';
-import { getCapacityData } from './capacity-check.js';
-import { getCallerHistory, getRecentConversations, searchLearnings } from './aria-memory.js';
+export const config = { api: { bodyParser: true }, maxDuration: 10 };
 
 const TIMEZONE = 'America/Vancouver';
-
 const KB_SAVE_URL = 'https://lhs-knowledge-base.vercel.app/api/save';
 const VOICE_CACHE_KEY = 'aria_voice_cache';
 
-// Read pre-built cache from KB — NEVER calls HCP directly. Instant response.
+// Read pre-built cache from KB — ZERO heavy imports, instant response
 async function readVoiceCache() {
   try {
     const resp = await fetch(`${KB_SAVE_URL}?key=${VOICE_CACHE_KEY}`);
@@ -29,22 +26,8 @@ async function readVoiceCache() {
   }
 }
 
-async function buildUrgentFlags() {
-  const flags = [];
-  const overdue = await getOverdueTasks();
-  if (overdue.length > 0) {
-    flags.push(`${overdue.length} overdue task${overdue.length !== 1 ? 's' : ''} need attention: ${overdue.slice(0, 3).map(t => t.description).join(', ')}`);
-  }
-
-  try {
-    const cap = await getCapacityData();
-    if (cap.capacity >= 90) flags.push(`Workforce is at ${cap.capacity}% capacity — urgent hiring needed.`);
-    else if (cap.capacity >= 80) flags.push(`Workforce is at ${cap.capacity}% capacity — time to start hiring.`);
-    else if (cap.capacity >= 70) flags.push(`Workforce is at ${cap.capacity}% capacity — hiring should be on the radar.`);
-  } catch (e) {}
-
-  return flags;
-}
+// buildUrgentFlags removed — not needed for the fast live_data path
+// Tasks and capacity are available via their own action endpoints
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -61,31 +44,19 @@ export default async function handler(req, res) {
 
   try {
     // get_live_data — full real-time context for voice conversations
+    // FAST PATH: live_data reads only from cache — no heavy imports
     if (action === 'live_data' || !action) {
-      const [cache, openTasks, flags] = await Promise.all([
-        readVoiceCache(),
-        getOpenTasks(),
-        buildUrgentFlags()
-      ]);
+      const cache = await readVoiceCache();
 
       if (!cache) {
         return res.status(200).json({
           schedule: 'Schedule data is not available right now. The cache is being built. Please try again in a moment or text 778-200-6517 for accurate information.',
-          tasks: 'No task data available.',
-          urgentFlags: ['Voice cache is empty — data will be available shortly.'],
           timestamp: new Date().toLocaleString('en-CA', { timeZone: TIMEZONE })
         });
       }
 
-      const taskSummary = openTasks.length > 0
-        ? `Karen has ${openTasks.length} open task${openTasks.length !== 1 ? 's' : ''}. Top priorities: ${openTasks.slice(0, 3).map(t => t.description).join(', ')}.`
-        : 'No open tasks right now.';
-
       return res.status(200).json({
         schedule: cache.schedule,
-        tasks: taskSummary,
-        taskCount: openTasks.length,
-        urgentFlags: flags,
         todayJobCount: cache.todayJobCount || 0,
         tomorrowJobCount: cache.tomorrowJobCount || 0,
         cleanerCount: cache.cleanerCount || 0,
@@ -96,6 +67,7 @@ export default async function handler(req, res) {
 
     // get_caller_history — past conversations with a specific caller
     if (action === 'caller_history') {
+      const { getCallerHistory } = await import('./aria-memory.js');
       const phone = req.query.phone || req.body?.phone || '';
       const history = await getCallerHistory(phone, 5);
       if (history.length === 0) {
@@ -119,6 +91,7 @@ export default async function handler(req, res) {
 
     // search_knowledge — search learnings and memory
     if (action === 'search_knowledge') {
+      const { searchLearnings } = await import('./aria-memory.js');
       const q = req.query.q || req.body?.q || '';
       const results = await searchLearnings(q, 5);
       if (results.length === 0) {
@@ -133,6 +106,7 @@ export default async function handler(req, res) {
 
     // get_task_list — Karen's open tasks with priorities
     if (action === 'task_list') {
+      const { getOpenTasks, getOverdueTasks } = await import('./task-store.js');
       const tasks = await getOpenTasks();
       const overdue = await getOverdueTasks();
       if (tasks.length === 0) return res.status(200).json({ text: 'No open tasks right now. Your slate is clean!' });
@@ -151,6 +125,7 @@ export default async function handler(req, res) {
     // get_capacity — workforce capacity and trend
     if (action === 'capacity') {
       try {
+        const { getCapacityData } = await import('./capacity-check.js');
         const cap = await getCapacityData();
         const trendStr = cap.trend > 0 ? `up ${cap.trend}% from last week` : cap.trend < 0 ? `down ${Math.abs(cap.trend)}% from last week` : 'flat from last week';
         let text = `Workforce is at ${cap.capacity}% capacity. ${cap.bookedHours} hours booked out of ${cap.availableHours} available across ${cap.cleanerCount} cleaners. Trend: ${trendStr}.`;
