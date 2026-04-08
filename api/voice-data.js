@@ -35,12 +35,16 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Headers', '*');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  const authHeader = req.headers.authorization || '';
-  if (!process.env.INTERNAL_SECRET || authHeader !== `Bearer ${process.env.INTERNAL_SECRET}`) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-
   const { action } = req.query;
+
+  // live_data is PUBLIC — no auth needed. ElevenLabs calls this without headers.
+  // All other actions require auth.
+  if (action !== 'live_data' && action) {
+    const authHeader = req.headers.authorization || '';
+    if (!process.env.INTERNAL_SECRET || authHeader !== `Bearer ${process.env.INTERNAL_SECRET}`) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+  }
 
   try {
     // get_live_data — full real-time context for voice conversations

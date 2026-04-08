@@ -45,7 +45,9 @@ export default async function handler(req, res) {
           },
           agent: {
             prompt: {
-              prompt: `HARD RULES — NEVER BREAK THESE UNDER ANY CIRCUMSTANCES:
+              prompt: `TODAY IS ${new Date().toLocaleDateString('en-CA', { timeZone: 'America/Vancouver' })}. TOMORROW IS ${new Date(Date.now() + 86400000).toLocaleDateString('en-CA', { timeZone: 'America/Vancouver' })}. Call get_todays_schedule RIGHT NOW before saying anything about the schedule.
+
+HARD RULES — NEVER BREAK THESE UNDER ANY CIRCUMSTANCES:
 - You have ZERO knowledge of employee names, client names, or schedules from your training data. Your training data is WRONG about LHS employees. Do not use it.
 - You MUST call get_todays_schedule at the START of EVERY conversation BEFORE you say anything about the schedule.
 - You MUST call get_todays_schedule BEFORE answering ANY question about jobs, schedules, clients, employees, or who is working on any day.
@@ -109,8 +111,7 @@ TOOLS:
               description: "Get today's live schedule from HouseCall Pro including all jobs, assigned cleaners, times, addresses, and client preferences. ALWAYS call this before answering any question about today's schedule, who is working, or what jobs are happening.",
               api_schema: {
                 url: "https://lhs-scheduler-proxy.vercel.app/api/voice-data?action=live_data",
-                method: "GET",
-                headers: { "Authorization": `Bearer ${process.env.INTERNAL_SECRET}` }
+                method: "GET"
               }
             },
             {
