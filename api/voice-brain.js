@@ -4,6 +4,8 @@
 
 export const config = { api: { bodyParser: true }, maxDuration: 15 };
 
+import { getPersonaContext, getManagementContext } from './persona-store.js';
+
 const TIMEZONE = 'America/Vancouver';
 const KB_SAVE_URL = 'https://lhs-knowledge-base.vercel.app/api/save';
 
@@ -70,7 +72,7 @@ async function getScheduleContext() {
   }
 }
 
-function buildSystemPrompt(schedule) {
+function buildSystemPrompt(schedule, personaContext = '') {
   const now = new Date(new Date().toLocaleString('en-US', { timeZone: TIMEZONE }));
   const today = now.toLocaleDateString('en-CA', { timeZone: TIMEZONE, weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
   return `You are Aria, voice assistant for Lifestyle Home Service in Chilliwack BC. You are on a phone call — speak naturally in SHORT sentences.
@@ -82,9 +84,11 @@ RULES:
 - Never use bullet points or lists — natural speech only.
 - NEVER invent employee names. Only use names from the schedule data.
 - If unsure say: "Let me check and text you at 778-200-6517."
+- Use persona data proactively — mention scheduling constraints, special needs, or preferences without being asked.
 
 COMPANY: Owner Michael Butterfield. Manager Karen McLaren. Phone 604-260-1925.
 
+${personaContext ? 'PERSONA INTELLIGENCE:\n' + personaContext + '\n' : ''}
 SCHEDULE:
 ${schedule}
 
@@ -113,7 +117,21 @@ export default async function handler(req, res) {
 
   try {
     const schedule = await getScheduleContext();
-    const systemPrompt = buildSystemPrompt(schedule);
+
+    // Extract names from user's latest message to load relevant personas
+    const lastUserMsg = [...messages].reverse().find(m => m.role === 'user')?.content || '';
+    let personaContext = '';
+    try {
+      personaContext = await getPersonaContext(lastUserMsg);
+      if (!personaContext) {
+        // Also try management context
+        personaContext = await getManagementContext();
+      } else {
+        personaContext += '\n' + await getManagementContext();
+      }
+    } catch (e) {}
+
+    const systemPrompt = buildSystemPrompt(schedule, personaContext);
     const claudeMessages = messages.filter(m => m.role === 'user' || m.role === 'assistant').map(m => ({ role: m.role, content: m.content }));
     if (claudeMessages.length === 0) claudeMessages.push({ role: 'user', content: 'Hello' });
 
