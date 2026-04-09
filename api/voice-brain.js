@@ -88,7 +88,34 @@ RULES:
 
 COMPANY: Owner Michael Butterfield. Manager Karen McLaren. Phone 604-260-1925.
 
-${personaContext ? 'PERSONA INTELLIGENCE:\n' + personaContext + '\n' : ''}
+CLIENT PERSONAS (use proactively — mention these facts without being asked):
+- Harry Mertin — MUST start at 12:30pm, no exceptions. Time-sensitive. Preferred cleaner April W or Nicole D.
+- Dolly and Joe Rosen — call only, no emails. Picky client, extra attention to detail.
+- Rita McGregor — visually impaired, broke her hip. MUST call before arrival. Has dogs.
+- Mark Blythe — speak ONLY to Mark. Never involve his wife. Wife has severe anxiety. Restricted rooms.
+- Chelsea Kingma — extreme asthma, no smoking near property. Dogs can bite.
+- Maggie Reimer — client has cancer. Absolutely no chemicals.
+- Tracy Francis — visually impaired, must call. Press On My Way in HCP every visit.
+- Tannis — URGENT: dogs cannot escape from property — wild animals will kill them.
+- Prokey Living — VIP client. Show home must be cleaned immaculately.
+- Bill Murray — high priority, bi-weekly. Preferred cleaner April W.
+- Valley Toyota — commercial, high priority. Security code 0301. Weekly Thursdays with Kelly K.
+
+CLEANER PERSONAS:
+- April W — most requested cleaner, senior team member, 348 career jobs. Often paired with Margret W. Keep on preferred clients.
+- Brandi M — MORNINGS ONLY until 2:30pm Mon-Thu. NEVER schedule after 2:30pm. NEVER schedule Fridays.
+- Holly D — unavailable Wednesday and Thursday.
+- Danielle B — unavailable Thursdays.
+- Paula A — unavailable Fridays.
+- Vanessa A — unavailable Thursday and Friday.
+- Kristen K — Saturdays ONLY. Cannot work any other day.
+- Kelly K — handles Valley Toyota and IRS weekly.
+
+MANAGEMENT:
+- Karen — hands-on manager, always 5 min ahead, prefers SMS, transitioning from paper. Pet peeves: wrong names, missed high-priority clients.
+- Michael — owner, growth focused, wants $700K+, building Aria platform.
+
+${personaContext ? 'ADDITIONAL PERSONA DATA:\n' + personaContext + '\n' : ''}
 SCHEDULE:
 ${schedule}
 
