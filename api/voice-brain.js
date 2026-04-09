@@ -1,187 +1,243 @@
-// Aria Voice Brain — Claude-powered intelligence for ElevenLabs voice agent
-// ElevenLabs sends OpenAI-compatible chat completions requests
-// We inject live HCP schedule context, call Claude, return the response
-// Target: <2 second response time
+// Aria Voice Brain — Claude Haiku with SSE streaming for ElevenLabs
+// Target: first token to Karen's ears within 500ms
+// Architecture: ElevenLabs → voice-brain.js → Claude Haiku (streaming) → ElevenLabs speaks
 
 export const config = { api: { bodyParser: true }, maxDuration: 15 };
 
 const TIMEZONE = 'America/Vancouver';
 const KB_SAVE_URL = 'https://lhs-knowledge-base.vercel.app/api/save';
 
-// ─── Load voice cache (pre-built by voice-cache.js cron) ────────────────────
+// ─── In-memory schedule cache (avoids KB round-trip on warm instances) ───────
+let memSchedule = null;
+let memScheduleAge = 0;
+const MEM_TTL = 10 * 60 * 1000;
 
 async function getScheduleContext() {
+  // Tier 1: in-memory
+  if (memSchedule && (Date.now() - memScheduleAge) < MEM_TTL) return memSchedule;
+
+  // Tier 2: KB cache
   try {
     const resp = await fetch(`${KB_SAVE_URL}?key=aria_voice_cache`);
     const data = await resp.json();
-    if (data.value?.schedule) return data.value.schedule;
+    if (data.value?.schedule) {
+      memSchedule = data.value.schedule;
+      memScheduleAge = Date.now();
+      return memSchedule;
+    }
   } catch (e) {}
 
-  // Fallback: fetch live from HCP
+  // Tier 3: live HCP fetch
   try {
     const apiKey = process.env.HCP_API_KEY;
     const now = new Date(new Date().toLocaleString('en-US', { timeZone: TIMEZONE }));
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-    const tomorrowEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 2).toISOString();
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+    const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 2).toISOString();
 
-    const [jobsResp, clientsResp] = await Promise.all([
-      fetch(`https://api.housecallpro.com/jobs?scheduled_start_min=${todayStart}&scheduled_start_max=${tomorrowEnd}&page_size=200`,
+    const [jr, cr] = await Promise.all([
+      fetch(`https://api.housecallpro.com/jobs?scheduled_start_min=${start}&scheduled_start_max=${end}&page_size=200`,
         { headers: { 'Authorization': `Token ${apiKey}`, 'Accept': 'application/json' } }),
       fetch('https://lhs-knowledge-base.vercel.app/api/clients').catch(() => null)
     ]);
 
-    const jobs = jobsResp.ok ? ((await jobsResp.json()).jobs || []).filter(j => j.work_status !== 'pro canceled' && !j.deleted_at) : [];
+    const jobs = jr.ok ? ((await jr.json()).jobs || []).filter(j => j.work_status !== 'pro canceled' && !j.deleted_at) : [];
     let roster = [];
-    if (clientsResp?.ok) { const cd = await clientsResp.json(); roster = (cd.cleaners || []).filter(c => c.days?.length > 0); }
+    if (cr?.ok) { const cd = await cr.json(); roster = (cd.cleaners || []).filter(c => c.days?.length > 0); }
 
     const todayStr = now.toLocaleDateString('en-CA', { timeZone: TIMEZONE });
-    const tomorrow = new Date(now); tomorrow.setDate(tomorrow.getDate() + 1);
-    const tomorrowStr = tomorrow.toLocaleDateString('en-CA', { timeZone: TIMEZONE });
+    const tom = new Date(now); tom.setDate(tom.getDate() + 1);
+    const tomStr = tom.toLocaleDateString('en-CA', { timeZone: TIMEZONE });
 
     let text = '';
-    for (const day of [{ label: `TODAY (${todayStr})`, date: todayStr }, { label: `TOMORROW (${tomorrowStr})`, date: tomorrowStr }]) {
-      const dayJobs = jobs.filter(j => j.schedule?.scheduled_start && new Date(j.schedule.scheduled_start).toLocaleDateString('en-CA', { timeZone: TIMEZONE }) === day.date);
-      text += `${day.label}: ${dayJobs.length} jobs.\n`;
-      for (const j of dayJobs) {
-        const client = `${j.customer?.first_name || ''} ${j.customer?.last_name || ''}`.trim();
-        const emps = (j.assigned_employees || []).map(e => `${e.first_name} ${e.last_name}`.trim()).join(' and ') || 'UNASSIGNED';
-        const time = new Date(j.schedule.scheduled_start).toLocaleTimeString('en-CA', { timeZone: TIMEZONE, hour: 'numeric', minute: '2-digit' });
-        text += `- ${client} at ${time}, assigned to ${emps}, ${j.work_status}.\n`;
+    for (const d of [{ l: `TODAY (${todayStr})`, dt: todayStr }, { l: `TOMORROW (${tomStr})`, dt: tomStr }]) {
+      const dj = jobs.filter(j => j.schedule?.scheduled_start && new Date(j.schedule.scheduled_start).toLocaleDateString('en-CA', { timeZone: TIMEZONE }) === d.dt);
+      text += `${d.l}: ${dj.length} jobs.\n`;
+      for (const j of dj) {
+        const c = `${j.customer?.first_name || ''} ${j.customer?.last_name || ''}`.trim();
+        const e = (j.assigned_employees || []).map(x => `${x.first_name} ${x.last_name}`.trim()).join(' and ') || 'UNASSIGNED';
+        const t = new Date(j.schedule.scheduled_start).toLocaleTimeString('en-CA', { timeZone: TIMEZONE, hour: 'numeric', minute: '2-digit' });
+        text += `- ${c} at ${t}, assigned to ${e}, ${j.work_status}.\n`;
       }
       text += '\n';
     }
-    text += 'ACTIVE CLEANER ROSTER (ONLY these names exist):\n';
+    text += 'CLEANER ROSTER (ONLY these names exist):\n';
     for (const c of roster) text += `- ${c.name}\n`;
+    memSchedule = text;
+    memScheduleAge = Date.now();
     return text;
   } catch (e) {
-    return 'Schedule data unavailable right now.';
+    return 'Schedule data unavailable.';
   }
 }
 
-// ─── Build the voice system prompt ──────────────────────────────────────────
-
-function buildSystemPrompt(scheduleData) {
+function buildSystemPrompt(schedule) {
   const now = new Date(new Date().toLocaleString('en-US', { timeZone: TIMEZONE }));
-  const todayStr = now.toLocaleDateString('en-CA', { timeZone: TIMEZONE, weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  const today = now.toLocaleDateString('en-CA', { timeZone: TIMEZONE, weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  return `You are Aria, voice assistant for Lifestyle Home Service in Chilliwack BC. You are on a phone call — speak naturally in SHORT sentences.
 
-  return `You are Aria, the voice assistant for Lifestyle Home Service (LHS), a cleaning company in Chilliwack, BC. You are speaking on the phone — not texting.
+TODAY IS ${today}.
 
-TODAY IS ${todayStr}.
+RULES:
+- 3 sentences maximum per answer. Be concise.
+- Never use bullet points or lists — natural speech only.
+- NEVER invent employee names. Only use names from the schedule data.
+- If unsure say: "Let me check and text you at 778-200-6517."
 
-VOICE RULES — CRITICAL:
-- Speak in short natural sentences. Never use bullet points, lists, or numbered items.
-- Keep every answer under 30 seconds of speaking time — roughly 3 to 4 sentences maximum.
-- Sound warm, confident, and professional — like a trusted colleague.
-- NEVER guess or invent employee names. Only use names from the schedule data below.
-- If you do not know something, say exactly: "Let me check on that and get back to you in about 5 minutes Karen — would you prefer a text or a call back?"
-- Never say "according to the data" or "based on my records" — just state the facts naturally.
+COMPANY: Owner Michael Butterfield. Manager Karen McLaren. Phone 604-260-1925.
 
-COMPANY:
-Owner Michael Butterfield. Manager Karen McLaren. Main line 604-260-1925. Aria's text number 778-200-6517.
+SCHEDULE:
+${schedule}
 
-LIVE SCHEDULE DATA:
-${scheduleData}
-
-TRAINING PROGRAM (LHS Academy — Cleaning Tech Boot Camp):
-9 modules, 42 videos, 125 quiz questions. 70% pass required.
-Module 1: Core Concepts and Safety. Module 2: Scope of Service. Module 3: Bathroom. Module 4: Kitchen. Module 5: Dusting and Bedrooms. Module 6: Floor Care. Module 7: Add-On Services. Module 8: Commercial and Quality Checks. Module 9: Image and Details.
-
-CLEANER AVAILABILITY:
-Brandi M is mornings only until 2:30pm Monday through Thursday, unavailable Friday.
-Holly D is unavailable Wednesday and Thursday.
-Danielle B is unavailable Thursday.
-Paula A is unavailable Friday.
-Vanessa A is unavailable Thursday and Friday.
-Kristen K only works Saturday.
-
-When answering questions about the schedule, mention specific names, times, and clients naturally. For example say "Tomorrow Nicole D is at Michelle Bowman at 9am, and April W and Margret W have Charlie and Sue Coltart at 2:15" — not a list.`;
+AVAILABILITY: Brandi M mornings only Mon-Thu. Holly D off Wed/Thu. Danielle B off Thu. Paula A off Fri. Vanessa A off Thu/Fri. Kristen K Saturday only.`;
 }
 
-// ─── OpenAI-compatible chat completions handler ─────────────────────────────
+// ─── Handler ────────────────────────────────────────────────────────────────
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', '*');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  // ElevenLabs may hit /v1/chat/completions — handle both the root and that path
-  if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
+  // GET = ping/warmup — keeps the function instance alive
+  if (req.method === 'GET') {
+    // Pre-load schedule into memory while we're at it
+    await getScheduleContext();
+    return res.status(200).json({ status: 'warm', cached: !!memSchedule });
+  }
 
   const startTime = Date.now();
+  const body = req.body || {};
+  const messages = body.messages || [];
+  const stream = body.stream === true;
 
   try {
-    const body = req.body || {};
-    const messages = body.messages || [];
+    const schedule = await getScheduleContext();
+    const systemPrompt = buildSystemPrompt(schedule);
+    const claudeMessages = messages.filter(m => m.role === 'user' || m.role === 'assistant').map(m => ({ role: m.role, content: m.content }));
+    if (claudeMessages.length === 0) claudeMessages.push({ role: 'user', content: 'Hello' });
 
-    // Load schedule context
-    const scheduleData = await getScheduleContext();
-    const systemPrompt = buildSystemPrompt(scheduleData);
+    const cacheLoad = Date.now() - startTime;
 
-    // Build messages for Claude — inject our system prompt
-    const claudeMessages = messages
-      .filter(m => m.role === 'user' || m.role === 'assistant')
-      .map(m => ({ role: m.role, content: m.content }));
+    if (stream) {
+      // ─── STREAMING MODE — SSE chunks for ElevenLabs ─────────────────
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
 
-    // If no user messages, provide a default
-    if (claudeMessages.length === 0) {
-      claudeMessages.push({ role: 'user', content: 'Hello' });
-    }
-
-    // Call Claude API
-    const claudeResp = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-5',
-        max_tokens: 200,
-        system: systemPrompt,
-        messages: claudeMessages
-      })
-    });
-
-    const claudeData = await claudeResp.json();
-    const reply = claudeData.content?.[0]?.text || "I'm having a bit of trouble right now Karen. Can you text me at 778-200-6517 and I'll get right back to you?";
-
-    const elapsed = Date.now() - startTime;
-    console.log(`[VOICE-BRAIN] ${elapsed}ms | "${claudeMessages[claudeMessages.length - 1]?.content?.substring(0, 50)}" → "${reply.substring(0, 80)}"`);
-
-    // Return in OpenAI chat completions format
-    return res.status(200).json({
-      id: `chatcmpl-${Date.now()}`,
-      object: 'chat.completion',
-      created: Math.floor(Date.now() / 1000),
-      model: 'aria-voice-brain',
-      choices: [{
-        index: 0,
-        message: {
-          role: 'assistant',
-          content: reply
+      const claudeResp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01'
         },
-        finish_reason: 'stop'
-      }],
-      usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
-    });
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 150,
+          stream: true,
+          system: systemPrompt,
+          messages: claudeMessages
+        })
+      });
 
+      const id = `chatcmpl-${Date.now()}`;
+      let firstChunkSent = false;
+
+      // Read Claude's SSE stream and convert to OpenAI format
+      const reader = claudeResp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const raw = line.slice(6).trim();
+          if (raw === '[DONE]') continue;
+
+          try {
+            const evt = JSON.parse(raw);
+            if (evt.type === 'content_block_delta' && evt.delta?.text) {
+              if (!firstChunkSent) {
+                console.log(`[VOICE-BRAIN] First token: ${Date.now() - startTime}ms (cache: ${cacheLoad}ms)`);
+                firstChunkSent = true;
+              }
+
+              const chunk = {
+                id,
+                object: 'chat.completion.chunk',
+                created: Math.floor(Date.now() / 1000),
+                model: 'aria-voice-brain',
+                choices: [{
+                  index: 0,
+                  delta: { content: evt.delta.text },
+                  finish_reason: null
+                }]
+              };
+              res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+            }
+          } catch (e) {}
+        }
+      }
+
+      // Send final chunk
+      res.write(`data: ${JSON.stringify({
+        id, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000),
+        model: 'aria-voice-brain', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }]
+      })}\n\n`);
+      res.write('data: [DONE]\n\n');
+      res.end();
+      console.log(`[VOICE-BRAIN] Stream complete: ${Date.now() - startTime}ms`);
+
+    } else {
+      // ─── NON-STREAMING MODE — full response ─────────────────────────
+      const claudeResp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01'
+        },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 150,
+          system: systemPrompt,
+          messages: claudeMessages
+        })
+      });
+
+      const claudeData = await claudeResp.json();
+      const reply = claudeData.content?.[0]?.text || "Can you text me at 778-200-6517 Karen? I'll check right away.";
+      console.log(`[VOICE-BRAIN] ${Date.now() - startTime}ms | "${claudeMessages[claudeMessages.length - 1]?.content?.substring(0, 40)}" → "${reply.substring(0, 60)}"`);
+
+      return res.status(200).json({
+        id: `chatcmpl-${Date.now()}`,
+        object: 'chat.completion',
+        created: Math.floor(Date.now() / 1000),
+        model: 'aria-voice-brain',
+        choices: [{ index: 0, message: { role: 'assistant', content: reply }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+      });
+    }
   } catch (err) {
     console.error('[VOICE-BRAIN] Error:', err.message);
+    const fallback = "I'm having a moment Karen. Text me at 778-200-6517 and I'll check right away.";
+    if (body.stream) {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.write(`data: ${JSON.stringify({ id: `chatcmpl-${Date.now()}`, object: 'chat.completion.chunk', model: 'aria-voice-brain', choices: [{ index: 0, delta: { content: fallback }, finish_reason: 'stop' }] })}\n\n`);
+      res.write('data: [DONE]\n\n');
+      return res.end();
+    }
     return res.status(200).json({
-      id: `chatcmpl-${Date.now()}`,
-      object: 'chat.completion',
-      created: Math.floor(Date.now() / 1000),
-      model: 'aria-voice-brain',
-      choices: [{
-        index: 0,
-        message: {
-          role: 'assistant',
-          content: "I'm having a moment Karen. Can you text me at 778-200-6517 and I'll check on that for you right away?"
-        },
-        finish_reason: 'stop'
-      }]
+      id: `chatcmpl-${Date.now()}`, object: 'chat.completion', model: 'aria-voice-brain',
+      choices: [{ index: 0, message: { role: 'assistant', content: fallback }, finish_reason: 'stop' }]
     });
   }
 }

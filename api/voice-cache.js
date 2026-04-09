@@ -121,6 +121,9 @@ export default async function handler(req, res) {
 
     console.log(`[VOICE-CACHE] Cache saved: ${todayJobs.length} today, ${tomorrowJobs.length} tomorrow, ${cleanerRoster.length} cleaners`);
 
+    // Ping voice-brain.js to keep it warm and pre-load cache into its memory
+    fetch('https://lhs-scheduler-proxy.vercel.app/api/voice-brain', { method: 'GET' }).catch(() => {});
+
     return res.status(200).json({
       ok: true,
       todayDate: todayStr,
