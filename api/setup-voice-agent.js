@@ -129,7 +129,7 @@ TOOLS:
 - get_capacity: Workforce capacity percentage and trend.
 - add_task: Create a task from the conversation.`
             },
-            first_message: "Hi! This is Aria from Lifestyle Home Service. Let me pull up the live schedule... How can I help you today?",
+            first_message: "Good morning Michael! I hope you're feeling well rested and ready for a great day. It's so good to hear from you — how can I help you this morning?",
             language: "en"
           },
           // No tools needed — all intelligence comes from custom LLM (voice-brain.js → Claude)
