@@ -27,6 +27,69 @@ async function sendSMS(to, message) {
   return r.json();
 }
 
+async function buildEveningSummary(today, todayTasks, todayConvos) {
+  const dayName = new Date().toLocaleDateString('en-CA', { timeZone: TIMEZONE, weekday: 'long' });
+  const dateStr = new Date().toLocaleDateString('en-CA', { timeZone: TIMEZONE, month: 'long', day: 'numeric' });
+
+  // Fetch today's and tomorrow's job data
+  let todayJobs = 0, tomorrowJobs = 0, firstJob = '';
+  try {
+    const apiKey = process.env.HCP_API_KEY;
+    const now = new Date(new Date().toLocaleString('en-US', { timeZone: TIMEZONE }));
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+    const tomorrowEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 2).toISOString();
+
+    const resp = await fetch(`https://api.housecallpro.com/jobs?scheduled_start_min=${todayStart}&scheduled_start_max=${tomorrowEnd}&page_size=200`,
+      { headers: { 'Authorization': `Token ${apiKey}`, 'Accept': 'application/json' } });
+    if (resp.ok) {
+      const data = await resp.json();
+      const jobs = (data.jobs || []).filter(j => j.work_status !== 'pro canceled' && !j.deleted_at);
+      const todayStr = now.toLocaleDateString('en-CA', { timeZone: TIMEZONE });
+      const tom = new Date(now); tom.setDate(tom.getDate() + 1);
+      const tomStr = tom.toLocaleDateString('en-CA', { timeZone: TIMEZONE });
+      const tomDay = tom.toLocaleDateString('en-CA', { timeZone: TIMEZONE, weekday: 'long', month: 'long', day: 'numeric' });
+
+      const tj = jobs.filter(j => j.schedule?.scheduled_start && new Date(j.schedule.scheduled_start).toLocaleDateString('en-CA', { timeZone: TIMEZONE }) === todayStr);
+      const tmj = jobs.filter(j => j.schedule?.scheduled_start && new Date(j.schedule.scheduled_start).toLocaleDateString('en-CA', { timeZone: TIMEZONE }) === tomStr);
+      todayJobs = tj.length;
+      tomorrowJobs = tmj.length;
+
+      const completed = tj.filter(j => j.work_status === 'complete' || j.work_status === 'complete unrated').length;
+      const inProgress = tj.filter(j => j.work_status === 'in progress').length;
+      const cancelled = tj.filter(j => j.work_status === 'user canceled').length;
+
+      // First job tomorrow
+      const sorted = tmj.filter(j => j.work_status === 'scheduled').sort((a, b) => a.schedule.scheduled_start.localeCompare(b.schedule.scheduled_start));
+      if (sorted.length > 0) {
+        const fj = sorted[0];
+        const client = `${fj.customer?.first_name || ''} ${fj.customer?.last_name || ''}`.trim();
+        const cleaner = (fj.assigned_employees || []).map(e => `${e.first_name} ${e.last_name}`.trim()).join(' and ') || 'unassigned';
+        const time = new Date(fj.schedule.scheduled_start).toLocaleTimeString('en-CA', { timeZone: TIMEZONE, hour: 'numeric', minute: '2-digit' });
+        firstJob = `First job: ${time} — ${client} with ${cleaner}`;
+      }
+
+      // Build the summary
+      const tasksCompleted = (Array.isArray(todayTasks) ? todayTasks : []).filter(t => t.status === 'completed').length;
+      const pendingKaren = (Array.isArray(todayTasks) ? todayTasks : []).filter(t => t.status === 'open' && t.assigned_to === 'karen').length;
+
+      let msg = `Good evening Karen! Here's your end of day wrap-up — ${dayName}, ${dateStr}:\n\n`;
+      msg += `📋 TODAY'S SUMMARY:\n`;
+      msg += `${completed} jobs completed | ${inProgress} in progress | ${cancelled} cancelled\n`;
+      msg += `${tasksCompleted} tasks completed today\n`;
+      msg += `\n⏰ TOMORROW — ${tomDay}:\n`;
+      msg += `${tomorrowJobs} jobs scheduled\n`;
+      if (firstJob) msg += `${firstJob}\n`;
+      if (pendingKaren > 0) msg += `\n📌 PENDING FOR KAREN: ${pendingKaren} task${pendingKaren !== 1 ? 's' : ''} still open`;
+
+      return msg;
+    }
+  } catch (e) {
+    console.error('[DAILY-LEARNING] Evening summary HCP error:', e.message);
+  }
+
+  return `Good evening Karen! Here's your end of day wrap-up — ${dayName}, ${dateStr}:\n\n📋 TODAY'S SUMMARY:\nSchedule data unavailable for tonight's summary.`;
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   const isVercelCron = req.headers['x-vercel-cron'] === '1';
@@ -106,7 +169,8 @@ If nothing new was learned today, say "NO_NEW_LEARNINGS".`,
         updated_at: new Date().toISOString()
       });
 
-      await sendSMS(KAREN_PHONE, `Good evening Karen! Quiet day for learning — no new patterns or corrections to report. See you bright and early tomorrow! — Aria 🏠`);
+      const eveningSummary = await buildEveningSummary(today, todayTasks, todayConvos);
+      await sendSMS(KAREN_PHONE, eveningSummary + `\n\n🧠 WHAT I LEARNED TODAY:\nNo new corrections today.\n\n— Aria 🏠`);
       return res.status(200).json({ ok: true, learnings: 0, message: 'No new learnings today' });
     }
 
@@ -122,12 +186,15 @@ If nothing new was learned today, say "NO_NEW_LEARNINGS".`,
     // Save as pending
     await kbWrite('aria_pending_learnings', { date: today, learnings: parsedLearnings, status: 'pending' });
 
-    // Step 3: Send approval SMS
-    let smsText = `Good evening Karen! Here's what I learned today:\n\n`;
+    // Step 3: Build evening summary + learnings
+    const eveningSummary = await buildEveningSummary(today, todayTasks, todayConvos);
+
+    let smsText = eveningSummary;
+    smsText += `\n\n🧠 WHAT I LEARNED TODAY:\n`;
     for (const l of parsedLearnings) {
       smsText += `${l.id}. ${l.learning}\n`;
     }
-    smsText += `\nReply CONFIRM to save all.\nReply a NUMBER to remove that one.\nReply SKIP to discard all.\n— Aria 🏠`;
+    smsText += `\nReply CONFIRM to save all.\nReply a NUMBER to correct one.\nReply SKIP to discard.\n— Aria 🏠`;
 
     const smsResult = await sendSMS(KAREN_PHONE, smsText);
     console.log(`[DAILY-LEARNING] SMS sent: ${smsResult.sid ? 'OK' : 'FAILED'}`);

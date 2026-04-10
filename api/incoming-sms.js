@@ -5,6 +5,7 @@ import { getCapacityData } from './capacity-check.js';
 import { saveConversation, saveLearning, buildCallerContext } from './aria-memory.js';
 import { analyzeSchedule } from './scheduling-intelligence.js';
 import { sendEmail, saveDraft, lookupClientEmail, isSensitiveTopic } from './aria-email.js';
+import { executeOffboarding } from './employee-offboarding.js';
 import { logSickDay, detectPatterns } from './sick-day-log.js';
 import { makeCall, lookupClientPhone } from './aria-call.js';
 
@@ -814,6 +815,17 @@ CATEGORY ASSIGNMENT — choose the most specific match:
         required: ['client_name', 'message']
       }
     }, {
+      name: 'offboard_employee',
+      description: 'Start employee offboarding. Use when Karen says "[name] last day was [date]", "offboard [name]", or "[name] is leaving". This sends ROE email to Bill Gee, updates KB, and sends Karen a checklist.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          employee_name: { type: 'string', description: 'Full name of the employee leaving (e.g. "Emily F")' },
+          last_day: { type: 'string', description: 'Last day worked in YYYY-MM-DD format' }
+        },
+        required: ['employee_name']
+      }
+    }, {
       name: 'report_sick_day',
       description: 'Process a sick day report. Use when ANY cleaner (not Karen) texts that they are sick, can\'t come in, not feeling well, calling in sick, or similar. This triggers the full cascade: find affected jobs, suggest replacements, notify Karen, log the sick day.',
       input_schema: {
@@ -1428,6 +1440,21 @@ CATEGORY ASSIGNMENT — choose the most specific match:
       } catch (err) {
         console.error('[CALL] Failed:', err.message);
         twimlReply = `Sorry, the call to ${client_name} failed. — LHS 🏠`;
+      }
+
+    } else if (toolUse && toolUse.name === 'offboard_employee') {
+      const { employee_name, last_day } = toolUse.input;
+      console.log(`[OFFBOARD] Tool: ${employee_name}, last day ${last_day || 'unknown'}`);
+      try {
+        const result = await executeOffboarding({ employeeName: employee_name, lastDay: last_day || 'Unknown', adminPhone: from });
+        if (result.ok) {
+          twimlReply = `Understood. Starting offboarding for ${employee_name} now. Last day recorded as ${last_day || 'unknown'}. ROE email ${result.roeEmailSent ? 'sent' : 'failed'} to Bill Gee. I've sent you the full checklist. — LHS 🏠`;
+        } else {
+          twimlReply = `I had trouble with the offboarding for ${employee_name}. Error: ${result.error}. — LHS 🏠`;
+        }
+      } catch (err) {
+        console.error('[OFFBOARD] Failed:', err.message);
+        twimlReply = `Sorry, the offboarding process hit an error. I'll note this and Karen can follow up manually. — LHS 🏠`;
       }
 
     } else if (toolUse && toolUse.name === 'get_schedule_intelligence') {
