@@ -6,6 +6,7 @@ import { saveConversation, saveLearning, buildCallerContext } from './aria-memor
 import { analyzeSchedule } from './scheduling-intelligence.js';
 import { sendEmail, saveDraft, lookupClientEmail, isSensitiveTopic } from './aria-email.js';
 import { executeOffboarding } from './employee-offboarding.js';
+import { saveTMOR } from './tmor.js';
 import { logSickDay, detectPatterns } from './sick-day-log.js';
 import { makeCall, lookupClientPhone } from './aria-call.js';
 
@@ -615,6 +616,11 @@ save_learning: Use PROACTIVELY when you discover new information during a conver
   Karen says "Valley Toyota wants biweekly instead of weekly" → save_learning about Valley Toyota
   You don't need to ask permission — just save it and confirm: "Noted! I'll remember that Hans Claus switched to Wednesdays."
 
+save_tmor: TMOR = The Morning Opportunity Report. Use when Karen says "TMOR", "morning opportunity report", or "opportunity report".
+  When Karen triggers TMOR, say: "Ready Karen — this is your Morning Opportunity Report. Go ahead and describe what happened. When you're done say 'end TMOR' and I'll save everything."
+  When Karen says "end TMOR" or finishes describing, use save_tmor with the full description.
+  Every morning challenge is an opportunity to improve SOPs and be more proactive tomorrow.
+
 send_email: Use when Karen says "email", "send an email", or "write to" someone. Rules:
   ROUTINE (auto-send): appointment confirmations, schedule updates, thank-you notes, general info
   SENSITIVE (draft only): complaints, pricing changes, cancellations, refunds, legal, bad news
@@ -824,6 +830,16 @@ CATEGORY ASSIGNMENT — choose the most specific match:
           last_day: { type: 'string', description: 'Last day worked in YYYY-MM-DD format' }
         },
         required: ['employee_name']
+      }
+    }, {
+      name: 'save_tmor',
+      description: 'Save a TMOR (The Morning Opportunity Report). Use when Karen says "TMOR", "morning opportunity report", or "end TMOR". When Karen says TMOR, ask her to describe what happened. When she says "end TMOR" or finishes describing, save the full report using this tool.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          description: { type: 'string', description: 'Full description of what Karen reported in her morning opportunity report' }
+        },
+        required: ['description']
       }
     }, {
       name: 'report_sick_day',
@@ -1440,6 +1456,21 @@ CATEGORY ASSIGNMENT — choose the most specific match:
       } catch (err) {
         console.error('[CALL] Failed:', err.message);
         twimlReply = `Sorry, the call to ${client_name} failed. — LHS 🏠`;
+      }
+
+    } else if (toolUse && toolUse.name === 'save_tmor') {
+      const { description } = toolUse.input;
+      console.log(`[TMOR] Saving report: ${description.substring(0, 60)}`);
+      try {
+        const result = await saveTMOR({ description, adminPhone: from });
+        let msg = `TMOR saved! I've analyzed your morning report and sent Michael a summary.\n\n`;
+        msg += result.analysis.substring(0, 300);
+        if (result.sopMatch) msg += `\n\n${result.sopMatch}`;
+        msg += `\n\n— Aria 🏠`;
+        twimlReply = msg;
+      } catch (err) {
+        console.error('[TMOR] Failed:', err.message);
+        twimlReply = `I had trouble saving the TMOR. I'll note what you said and try again. — LHS 🏠`;
       }
 
     } else if (toolUse && toolUse.name === 'offboard_employee') {
