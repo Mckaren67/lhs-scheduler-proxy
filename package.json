@@ -1,0 +1,7 @@
+{
+  "name": "lhs-scheduler-proxy",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Aria — voice and SMS scheduling assistant for Lifestyle Home Service"
+}
