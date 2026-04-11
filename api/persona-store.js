@@ -82,6 +82,61 @@ export async function getPersonaContext(query) {
   return parts.join('\n');
 }
 
+// Look up a persona by phone number — checks clients then HCP customers API
+export async function getPersonaByPhone(phone) {
+  if (!phone) return '';
+  await loadAll();
+  const digits = phone.replace(/\D/g, '');
+
+  // Check client personas for phone match (if they have phone fields)
+  if (clientPersonas) {
+    for (const p of clientPersonas) {
+      const pStr = JSON.stringify(p).replace(/\D/g, '');
+      if (digits.length >= 7 && pStr.includes(digits.slice(-7))) {
+        let ctx = `CALLER MATCHED CLIENT — ${p.name}:`;
+        if (p.priority) ctx += ` ${p.priority} priority.`;
+        if (p.client_type) ctx += ` ${p.client_type}.`;
+        if (p.scheduling_rhythm) ctx += ` Schedule: ${p.scheduling_rhythm}.`;
+        if (p.preferred_cleaner) ctx += ` Preferred cleaner: ${p.preferred_cleaner}.`;
+        if (p.personality_notes?.length) ctx += ` Notes: ${p.personality_notes.join('. ')}.`;
+        return ctx;
+      }
+    }
+  }
+
+  // Check cleaner personas
+  if (cleanerPersonas) {
+    for (const p of cleanerPersonas) {
+      const pStr = JSON.stringify(p).replace(/\D/g, '');
+      if (digits.length >= 7 && pStr.includes(digits.slice(-7))) {
+        let ctx = `CALLER MATCHED CLEANER — ${p.name}:`;
+        if (p.scheduling_patterns?.length) ctx += ` ${p.scheduling_patterns.join('. ')}.`;
+        if (p.strengths?.length) ctx += ` Strengths: ${p.strengths.join(', ')}.`;
+        return ctx;
+      }
+    }
+  }
+
+  // Try HCP customers API for real-time phone lookup
+  try {
+    const apiKey = process.env.HCP_API_KEY;
+    if (apiKey && digits.length >= 10) {
+      const resp = await fetch(`https://api.housecallpro.com/customers?phone_number=${digits.slice(-10)}&page_size=1`, {
+        headers: { 'Authorization': `Token ${apiKey}`, 'Accept': 'application/json' }
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        const customer = data.customers?.[0];
+        if (customer) {
+          return `CALLER MATCHED HCP CLIENT — ${customer.first_name} ${customer.last_name}: ${customer.email || 'no email'}. Address: ${customer.addresses?.[0]?.street || 'unknown'}.`;
+        }
+      }
+    }
+  } catch (e) {}
+
+  return '';
+}
+
 // Get all management context (always loaded)
 export async function getManagementContext() {
   await loadAll();

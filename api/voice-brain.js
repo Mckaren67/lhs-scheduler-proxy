@@ -1,10 +1,54 @@
 // Aria Voice Brain — Claude Haiku with SSE streaming for ElevenLabs
-// Target: first token to Karen's ears within 500ms
+// Target: first token to caller's ears within 500ms
 // Architecture: ElevenLabs → voice-brain.js → Claude Haiku (streaming) → ElevenLabs speaks
+// Caller recognition: identifies callers by phone number, greets by name
 
 export const config = { api: { bodyParser: true }, maxDuration: 15 };
 
-import { getPersonaContext, getManagementContext } from './persona-store.js';
+import { getPersonaContext, getManagementContext, getPersonaByPhone } from './persona-store.js';
+
+// ─── Known callers — phone (last 10 digits) → identity ────────────────────
+const KNOWN_CALLERS = {
+  '6048009630': { name: 'Karen', fullName: 'Karen McLaren', role: 'manager' },
+  '6042601925': { name: 'Michael', fullName: 'Michael Butterfield', role: 'owner' }
+};
+
+// Extract caller phone from multiple possible sources
+function identifyCaller(body) {
+  let phone = '';
+
+  // Source 1: ElevenLabs system message with resolved {{system__caller_id}}
+  const messages = body.messages || [];
+  const systemMsg = messages.find(m => m.role === 'system');
+  if (systemMsg?.content) {
+    const match = systemMsg.content.match(/CALLER_PHONE:\s*(\+?[\d\s()-]+)/);
+    if (match) phone = match[1];
+  }
+
+  // Source 2: ElevenLabs may pass caller info in body metadata
+  if (!phone) phone = body.caller_id || body.phone_number || body.caller_phone || '';
+
+  // Source 3: ElevenLabs dynamic variables
+  if (!phone && body.dynamic_variables?.system__caller_id) {
+    phone = body.dynamic_variables.system__caller_id;
+  }
+
+  // Source 4: Check conversation_initiation_metadata
+  if (!phone && body.conversation_initiation_metadata?.caller_id) {
+    phone = body.conversation_initiation_metadata.caller_id;
+  }
+
+  // Normalize: strip non-digits, take last 10
+  const digits = phone.replace(/\D/g, '');
+  const last10 = digits.slice(-10);
+
+  // Check known callers
+  const known = KNOWN_CALLERS[last10];
+  if (known) return { ...known, phone: last10, identified: true };
+
+  // Unknown caller
+  return { name: null, fullName: null, role: 'unknown', phone: last10, identified: false };
+}
 
 const TIMEZONE = 'America/Vancouver';
 const KB_SAVE_URL = 'https://lhs-knowledge-base.vercel.app/api/save';
@@ -72,12 +116,39 @@ async function getScheduleContext() {
   }
 }
 
-function buildSystemPrompt(schedule, personaContext = '') {
+function buildSystemPrompt(schedule, personaContext = '', caller = {}) {
   const now = new Date(new Date().toLocaleString('en-US', { timeZone: TIMEZONE }));
   const today = now.toLocaleDateString('en-CA', { timeZone: TIMEZONE, weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  const hour = now.getHours();
+  const timeGreeting = hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : 'evening';
+
+  // Build caller-specific greeting and context
+  let callerBlock = '';
+  if (caller.role === 'manager') {
+    callerBlock = `CALLER IDENTIFIED: ${caller.fullName} (Manager) — recognized by phone number.
+GREETING: Your first response MUST start with "Good ${timeGreeting} Karen! How can I help you today?"
+ADDRESS: Always address her as Karen throughout the call. She is the manager — give her full operational access and detail.`;
+  } else if (caller.role === 'owner') {
+    callerBlock = `CALLER IDENTIFIED: ${caller.fullName} (Owner) — recognized by phone number.
+GREETING: Your first response MUST start with "Good ${timeGreeting} Michael! I hope you're feeling well — how can I help you today?"
+ADDRESS: Always address him as Michael throughout the call. He is the owner — give him strategic summaries and key metrics.`;
+  } else {
+    callerBlock = `UNKNOWN CALLER${caller.phone ? ` (phone: ${caller.phone})` : ''}.
+GREETING: Your first response MUST start with "Good ${timeGreeting}! Thank you for calling Lifestyle Home Service. Who am I speaking with today?"
+AFTER THEY GIVE THEIR NAME:
+- Address them by that name for the rest of the call.
+- If they are a client — mention their upcoming appointments or preferences if you have them.
+- If they are a cleaner — help with their scheduling or work question.
+- If they are new — treat as a potential new client inquiry. Be warm and helpful, offer to book an estimate.`;
+  }
+
+  const callerName = caller.name || 'the caller';
+
   return `You are Aria, voice assistant for Lifestyle Home Service in Chilliwack BC. You are on a phone call — speak naturally in SHORT sentences.
 
 TODAY IS ${today}.
+
+${callerBlock}
 
 RULES:
 - Speak naturally — no bullet points, no lists, pure conversational speech.
@@ -85,9 +156,9 @@ RULES:
 - NEVER invent employee names. Only use names from the schedule data.
 - Use persona data proactively — mention constraints and preferences without being asked.
 - NEVER say "give me a moment while I bring up the schedule" or "let me pull that up" or any variation. You already have the schedule loaded. Answer immediately and confidently.
-- NEVER make Karen wait on the line while you search for something. You have two modes only:
+- NEVER make ${callerName} wait on the line while you search for something. You have two modes only:
   MODE 1 — YOU KNOW IT: Answer immediately with confidence from your loaded data.
-  MODE 2 — YOU NEED TO RESEARCH: Say clearly with a specific timeline: "Karen let me work on that and I will call you back with two or three options in about 10 minutes. Would you prefer a call back or a text?" Then move on. Never hesitate mid-answer.
+  MODE 2 — YOU NEED TO RESEARCH: Say clearly with a specific timeline: "${caller.name || 'Let'} me work on that and I will call you back with two or three options in about 10 minutes. Would you prefer a call back or a text?" Then move on. Never hesitate mid-answer.
 
 COMPANY: Owner Michael Butterfield. Manager Karen McLaren. Phone 604-260-1925.
 
@@ -165,22 +236,32 @@ export default async function handler(req, res) {
   const stream = body.stream === true;
 
   try {
+    // Identify caller by phone number
+    const caller = identifyCaller(body);
+    if (caller.identified) {
+      console.log(`[VOICE-BRAIN] Caller identified: ${caller.fullName} (${caller.role}) from ${caller.phone}`);
+    } else if (caller.phone) {
+      console.log(`[VOICE-BRAIN] Unknown caller: ${caller.phone}`);
+    }
+
     const schedule = await getScheduleContext();
 
     // Extract names from user's latest message to load relevant personas
     const lastUserMsg = [...messages].reverse().find(m => m.role === 'user')?.content || '';
     let personaContext = '';
     try {
-      personaContext = await getPersonaContext(lastUserMsg);
-      if (!personaContext) {
-        // Also try management context
-        personaContext = await getManagementContext();
-      } else {
-        personaContext += '\n' + await getManagementContext();
+      // If caller is unknown, try to look up by phone in HCP
+      if (!caller.identified && caller.phone) {
+        const phonePersona = await getPersonaByPhone(caller.phone);
+        if (phonePersona) personaContext = phonePersona + '\n';
       }
+
+      const nameContext = await getPersonaContext(lastUserMsg);
+      if (nameContext) personaContext += nameContext + '\n';
+      personaContext += await getManagementContext();
     } catch (e) {}
 
-    const systemPrompt = buildSystemPrompt(schedule, personaContext);
+    const systemPrompt = buildSystemPrompt(schedule, personaContext, caller);
     const claudeMessages = messages.filter(m => m.role === 'user' || m.role === 'assistant').map(m => ({ role: m.role, content: m.content }));
     if (claudeMessages.length === 0) claudeMessages.push({ role: 'user', content: 'Hello' });
 
@@ -295,7 +376,7 @@ export default async function handler(req, res) {
     }
   } catch (err) {
     console.error('[VOICE-BRAIN] Error:', err.message);
-    const fallback = "I'm having a moment Karen. Text me at 778-200-6517 and I'll check right away.";
+    const fallback = "I'm having a moment — text me at 778-200-6517 and I'll check right away.";
     if (body.stream) {
       res.setHeader('Content-Type', 'text/event-stream');
       res.write(`data: ${JSON.stringify({ id: `chatcmpl-${Date.now()}`, object: 'chat.completion.chunk', model: 'aria-voice-brain', choices: [{ index: 0, delta: { content: fallback }, finish_reason: 'stop' }] })}\n\n`);

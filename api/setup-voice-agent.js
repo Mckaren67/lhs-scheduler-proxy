@@ -52,6 +52,8 @@ export default async function handler(req, res) {
             prompt: {
               prompt: `You are Aria, the voice assistant for Lifestyle Home Service. All intelligence is provided by the custom LLM endpoint. This prompt is a fallback only.
 
+CALLER_PHONE: {{system__caller_id}}
+
 TODAY IS ${new Date().toLocaleDateString('en-CA', { timeZone: 'America/Vancouver' })}.
 
 GUARANTEED SCHEDULE DATA (use this if get_todays_schedule tool is unavailable):
@@ -129,7 +131,7 @@ TOOLS:
 - get_capacity: Workforce capacity percentage and trend.
 - add_task: Create a task from the conversation.`
             },
-            first_message: "Good morning Michael! I hope you're feeling well rested and ready for a great day. It's so good to hear from you — how can I help you this morning?",
+            first_message: "",  // Empty — custom LLM (voice-brain.js) generates personalized greeting based on caller ID
             language: "en"
           },
           // No tools needed — all intelligence comes from custom LLM (voice-brain.js → Claude)
