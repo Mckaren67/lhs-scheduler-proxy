@@ -116,25 +116,93 @@ async function getScheduleContext() {
   }
 }
 
+// ─── Pacific time helpers (DST-aware via America/Vancouver) ─────────────────
+function getPacificTime() {
+  const now = new Date();
+
+  const fullDateTime = new Intl.DateTimeFormat('en-US', {
+    timeZone: TIMEZONE,
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  }).format(now);
+
+  const hour = parseInt(new Intl.DateTimeFormat('en-CA', {
+    timeZone: TIMEZONE,
+    hour: 'numeric',
+    hour12: false
+  }).format(now));
+
+  const minute = parseInt(new Intl.DateTimeFormat('en-CA', {
+    timeZone: TIMEZONE,
+    minute: 'numeric'
+  }).format(now));
+
+  const todayStr = new Intl.DateTimeFormat('en-US', {
+    timeZone: TIMEZONE,
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric'
+  }).format(now);
+
+  // Tomorrow
+  const tom = new Date(now.getTime() + 86400000);
+  const tomorrowStr = new Intl.DateTimeFormat('en-US', {
+    timeZone: TIMEZONE,
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric'
+  }).format(tom);
+
+  // PDT or PST
+  const tzAbbr = new Intl.DateTimeFormat('en-US', {
+    timeZone: TIMEZONE,
+    timeZoneName: 'short'
+  }).formatToParts(now).find(p => p.type === 'timeZoneName')?.value || 'PT';
+
+  return { fullDateTime, hour, minute, todayStr, tomorrowStr, tzAbbr };
+}
+
+function getTimeGreeting(hour, callerName) {
+  if (hour >= 5 && hour < 12) return 'morning';
+  if (hour >= 12 && hour < 17) return 'afternoon';
+  if (hour >= 17 && hour < 21) return 'evening';
+  // Late night / early morning
+  if (callerName) return null; // signal to use "Working late" greeting
+  return 'evening';
+}
+
 function buildSystemPrompt(schedule, personaContext = '', caller = {}) {
-  const now = new Date(new Date().toLocaleString('en-US', { timeZone: TIMEZONE }));
-  const today = now.toLocaleDateString('en-CA', { timeZone: TIMEZONE, weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
-  const hour = now.getHours();
-  const timeGreeting = hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : 'evening';
+  const pt = getPacificTime();
+  const timeGreeting = getTimeGreeting(pt.hour, caller.name);
+  const isLateNight = pt.hour >= 21 || pt.hour < 5;
 
   // Build caller-specific greeting and context
   let callerBlock = '';
   if (caller.role === 'manager') {
+    const greeting = isLateNight
+      ? `Working late tonight Karen! How can I help you?`
+      : `Good ${timeGreeting} Karen! How can I help you today?`;
     callerBlock = `CALLER IDENTIFIED: ${caller.fullName} (Manager) — recognized by phone number.
-GREETING: Your first response MUST start with "Good ${timeGreeting} Karen! How can I help you today?"
+GREETING: Your first response MUST start with "${greeting}"
 ADDRESS: Always address her as Karen throughout the call. She is the manager — give her full operational access and detail.`;
   } else if (caller.role === 'owner') {
+    const greeting = isLateNight
+      ? `Working late tonight Michael! I hope you're doing well — how can I help?`
+      : `Good ${timeGreeting} Michael! I hope you're feeling well — how can I help you today?`;
     callerBlock = `CALLER IDENTIFIED: ${caller.fullName} (Owner) — recognized by phone number.
-GREETING: Your first response MUST start with "Good ${timeGreeting} Michael! I hope you're feeling well — how can I help you today?"
+GREETING: Your first response MUST start with "${greeting}"
 ADDRESS: Always address him as Michael throughout the call. He is the owner — give him strategic summaries and key metrics.`;
   } else {
+    const greeting = `Good ${timeGreeting || 'evening'}! Thank you for calling Lifestyle Home Service. Who am I speaking with today?`;
     callerBlock = `UNKNOWN CALLER${caller.phone ? ` (phone: ${caller.phone})` : ''}.
-GREETING: Your first response MUST start with "Good ${timeGreeting}! Thank you for calling Lifestyle Home Service. Who am I speaking with today?"
+GREETING: Your first response MUST start with "${greeting}"
 AFTER THEY GIVE THEIR NAME:
 - Address them by that name for the rest of the call.
 - If they are a client — mention their upcoming appointments or preferences if you have them.
@@ -146,7 +214,10 @@ AFTER THEY GIVE THEIR NAME:
 
   return `You are Aria, voice assistant for Lifestyle Home Service in Chilliwack BC. You are on a phone call — speak naturally in SHORT sentences.
 
-TODAY IS ${today}.
+RIGHT NOW: It is ${pt.fullDateTime} ${pt.tzAbbr}.
+TODAY IS: ${pt.todayStr}
+TOMORROW IS: ${pt.tomorrowStr}
+Use this exact time and date in all responses. Reference the time naturally — for example "it is just after 6 so most jobs should be wrapping up" or "it is still early, let me pull up today's schedule."
 
 ${callerBlock}
 

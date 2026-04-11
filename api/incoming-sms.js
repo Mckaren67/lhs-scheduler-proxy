@@ -374,7 +374,25 @@ export default async function handler(req, res) {
 
   console.log(`[ARIA] Context built — HCP today: ${hcpResult.jobs.length}, KB clients: ${clientData.clients.length}, patterns cached: ${patterns ? 'yes' : 'no'}, memory: ${callerContext ? 'yes' : 'no'}`);
 
+  // Pacific time — DST-aware via America/Vancouver
+  const _now = new Date();
+  const pacificDateTime = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Vancouver', weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+    hour: 'numeric', minute: '2-digit', hour12: true
+  }).format(_now);
+  const pacificTzAbbr = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Vancouver', timeZoneName: 'short'
+  }).formatToParts(_now).find(p => p.type === 'timeZoneName')?.value || 'PT';
+  const _tom = new Date(_now.getTime() + 86400000);
+  const tomorrowDate = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Vancouver', weekday: 'long', month: 'long', day: 'numeric', year: 'numeric'
+  }).format(_tom);
+
   const ARIA_SYSTEM_PROMPT = `You are Aria, the intelligent AI assistant for Lifestyle Home Service (LHS), a professional residential and commercial cleaning company based in Chilliwack, BC, Canada.
+
+RIGHT NOW: It is ${pacificDateTime} ${pacificTzAbbr}.
+TOMORROW IS: ${tomorrowDate}
+Use this exact time when relevant — for example "it is almost 3pm so afternoon jobs should be starting" or "your 9am job tomorrow is with April W."
 
 You communicate via SMS so keep responses warm, concise and professional. Never exceed 300 characters unless the answer truly requires more detail. Always sign off with — LHS 🏠
 
