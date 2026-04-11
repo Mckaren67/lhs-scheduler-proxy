@@ -4,15 +4,22 @@
 const tools = new Map();
 
 /**
- * Register a tool with its definition and handler.
- * Called at module load time by each definition file.
+ * Register a tool with its definition and/or handler.
+ * Supports two-phase registration:
+ *   Phase 1 (definitions): registerTool('name', definition, null)
+ *   Phase 2 (handlers):    registerTool('name', null, handler)
+ * Merges into existing entry — does not clobber.
  *
  * @param {string} name — tool name (e.g. 'save_task')
- * @param {Object} definition — Claude tool schema { name, description, input_schema }
- * @param {Function} handler — async (input, ctx) => string (the reply text)
+ * @param {Object|null} definition — Claude tool schema, or null to keep existing
+ * @param {Function|null} handler — async (input, ctx) => string, or null to keep existing
  */
 export function registerTool(name, definition, handler) {
-  tools.set(name, { definition, handler });
+  const existing = tools.get(name) || { definition: null, handler: null };
+  tools.set(name, {
+    definition: definition || existing.definition,
+    handler: handler || existing.handler
+  });
 }
 
 /**
