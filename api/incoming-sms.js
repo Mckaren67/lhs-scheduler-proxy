@@ -174,6 +174,112 @@ async function fetchTodaysJobs() {
   }
 }
 
+// ─── Specific-date schedule fetching ─────────────────────────────────────────
+
+// Parse a specific date from a user message like "Monday April 13", "tomorrow", "next Tuesday"
+function parseDateFromMessage(message) {
+  const msg = message.toLowerCase();
+  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Vancouver' }));
+  const todayDow = now.getDay(); // 0=Sun
+
+  // "today"
+  if (/\btoday\b/.test(msg)) return formatDateCA(now);
+
+  // "tomorrow"
+  if (/\btomorrow\b/.test(msg)) {
+    const d = new Date(now); d.setDate(d.getDate() + 1);
+    return formatDateCA(d);
+  }
+
+  // Explicit date like "April 13", "april 13th", "Apr 13"
+  const monthNames = { jan:0,january:0,feb:1,february:1,mar:2,march:2,apr:3,april:3,may:4,jun:5,june:5,jul:6,july:6,aug:7,august:7,sep:8,september:8,oct:9,october:9,nov:10,november:10,dec:11,december:11 };
+  const explicitMatch = msg.match(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?\b/);
+  if (explicitMatch) {
+    const month = monthNames[explicitMatch[1]];
+    const day = parseInt(explicitMatch[2]);
+    if (month !== undefined && day >= 1 && day <= 31) {
+      const d = new Date(now.getFullYear(), month, day);
+      // If the date is in the past by more than 7 days, assume next year
+      if (d < now && (now - d) > 7 * 86400000) d.setFullYear(d.getFullYear() + 1);
+      return formatDateCA(d);
+    }
+  }
+
+  // Day name like "Monday", "next Tuesday", "this Wednesday"
+  const dayNames = { sunday:0,sun:0,monday:1,mon:1,tuesday:2,tue:2,tues:2,wednesday:3,wed:3,thursday:4,thu:4,thurs:4,friday:5,fri:5,saturday:6,sat:6 };
+  const dayMatch = msg.match(/\b(?:next|this|coming)?\s*(sunday|sun|monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thurs|friday|fri|saturday|sat)\b/);
+  if (dayMatch) {
+    const targetDow = dayNames[dayMatch[1]];
+    if (targetDow !== undefined) {
+      let daysAhead = (targetDow - todayDow + 7) % 7;
+      if (daysAhead === 0) daysAhead = 0; // Same day = today
+      if (/\bnext\b/.test(msg) && daysAhead < 7) daysAhead += 7; // "next Monday" = next week
+      if (daysAhead === 0 && !/\btoday\b/.test(msg) && !/\bthis\b/.test(msg)) daysAhead = 7; // Bare "Monday" = next Monday if today is Monday
+      const d = new Date(now); d.setDate(d.getDate() + daysAhead);
+      return formatDateCA(d);
+    }
+  }
+
+  return null; // No specific date found
+}
+
+function formatDateCA(d) {
+  return d.toLocaleDateString('en-CA', { timeZone: 'America/Vancouver' }); // YYYY-MM-DD
+}
+
+function formatDateFriendly(dateStr) {
+  const d = new Date(dateStr + 'T12:00:00');
+  return d.toLocaleDateString('en-US', { timeZone: 'America/Vancouver', weekday: 'long', month: 'long', day: 'numeric' });
+}
+
+// Fetch jobs for a specific date from HCP
+async function fetchJobsForDate(dateStr) {
+  try {
+    const apiKey = process.env.HCP_API_KEY;
+    const startOfDay = new Date(dateStr + 'T00:00:00-07:00').toISOString();
+    const endOfDay = new Date(dateStr + 'T23:59:59-07:00').toISOString();
+
+    const fetchUrl = `https://api.housecallpro.com/jobs?scheduled_start_min=${startOfDay}&scheduled_start_max=${endOfDay}&page_size=200`;
+    console.log(`[HCP] Fetching specific date ${dateStr}:`, fetchUrl);
+    const response = await fetchWithTimeout(fetchUrl, {
+      headers: {
+        'Authorization': `Token ${apiKey}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      }
+    }, 10000);
+
+    if (!response.ok) return { schedule: `Could not fetch schedule for ${dateStr}.`, jobs: [], dateStr };
+    const data = await response.json();
+    const jobs = (data.jobs || []).filter(j => j.work_status !== 'pro canceled' && !j.deleted_at);
+    const friendly = formatDateFriendly(dateStr);
+
+    if (jobs.length === 0) return { schedule: `No jobs scheduled for ${friendly}.`, jobs: [], dateStr };
+
+    // Sort by start time
+    jobs.sort((a, b) => new Date(a.schedule?.scheduled_start || 0) - new Date(b.schedule?.scheduled_start || 0));
+
+    const lines = jobs.map(job => {
+      const name = `${job.customer?.first_name || ''} ${job.customer?.last_name || ''}`.trim() || 'Unknown';
+      const employees = (job.assigned_employees || []).map(e => `${e.first_name} ${e.last_name}`).join(' and ') || 'Unassigned';
+      const start = job.schedule?.scheduled_start;
+      const startTime = start ? new Date(start).toLocaleTimeString('en-CA', { timeZone: 'America/Vancouver', hour: 'numeric', minute: '2-digit' }) : '?';
+      const status = job.work_status || 'scheduled';
+      const addr = job.address?.street || '';
+      return `• ${startTime} — ${name} — ${employees} — ${status}${addr ? ' — ' + addr : ''}`;
+    });
+
+    return {
+      schedule: `${friendly}: ${jobs.length} job(s) scheduled:\n${lines.join('\n')}`,
+      jobs,
+      dateStr
+    };
+  } catch (err) {
+    console.error(`[HCP] Fetch for ${dateStr} failed:`, err.message);
+    return { schedule: `Schedule data unavailable for ${dateStr}.`, jobs: [], dateStr };
+  }
+}
+
 function analyzeRecurringPatterns(jobs) {
   if (!jobs || jobs.length === 0) return '';
 
@@ -355,14 +461,27 @@ export default async function handler(req, res) {
 
   console.log(`[ARIA] Incoming SMS from ${from} (admin: ${isAdmin}): "${incomingMessage}"`);
 
-  // Fetch today's jobs and client preferences in parallel (patterns come from cache)
-  const [hcpResult, clientData] = await Promise.all([
-    fetchTodaysJobs(),
-    fetchClientPreferences()
-  ]);
+  // Check if the message asks about a specific date
+  const requestedDate = parseDateFromMessage(incomingMessage);
+  const todayDate = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Vancouver' });
+  const isSpecificDateRequest = requestedDate && requestedDate !== todayDate;
+
+  // Fetch today's jobs, client preferences, and specific date if requested — all in parallel
+  const fetchPromises = [fetchTodaysJobs(), fetchClientPreferences()];
+  if (isSpecificDateRequest) fetchPromises.push(fetchJobsForDate(requestedDate));
+
+  const [hcpResult, clientData, specificDateResult] = await Promise.all(fetchPromises);
+
   // Get cached patterns (triggers background refresh if stale — never blocks)
   const patterns = getCachedPatterns();
-  const scheduleContext = buildScheduleContext({ ...hcpResult, patterns }, clientData);
+  let scheduleContext = buildScheduleContext({ ...hcpResult, patterns }, clientData);
+
+  // If a specific date was requested, prepend that day's data prominently
+  if (specificDateResult) {
+    const friendly = formatDateFriendly(requestedDate);
+    scheduleContext = `\n*** SPECIFICALLY REQUESTED DATE — ${friendly} ***\nKaren asked about this specific date. Answer with ONLY this day's data:\n${specificDateResult.schedule}\n*** END OF REQUESTED DATE ***\n\n${scheduleContext}`;
+    console.log(`[ARIA] Specific date requested: ${requestedDate} — ${specificDateResult.jobs.length} jobs found`);
+  }
 
   // Load caller memory context (non-blocking — if it fails, we proceed without it)
   let callerContext = '';
@@ -559,6 +678,15 @@ You have access to real call transcripts and AI recaps from Dialpad via the sear
 ${callerContext ? `ARIA'S MEMORY — WHAT YOU KNOW ABOUT THIS CALLER:\n${callerContext}\nUse this to personalize your response. Reference previous conversations naturally.\n\n` : ''}TODAY'S LIVE SCHEDULE & CLIENT INTELLIGENCE:
 ${scheduleContext}
 
+SPECIFIC DATE REQUESTS — CRITICAL:
+When Karen asks about a SPECIFIC day like "Monday April 13", "next Tuesday", "tomorrow", "how does Friday look":
+1. If the data for that specific date appears above under "*** SPECIFICALLY REQUESTED DATE ***" — use ONLY that data to answer. Do NOT include other days.
+2. If the specific date data is not pre-loaded, use the fetch_day_schedule tool to get it.
+3. Answer conversationally about ONLY that day. Example: "Monday April 13 looks like a solid day — 18 jobs. First up is Michelle Bowman at 9am with Nicole D, last job wraps around 4pm."
+4. Keep it short and specific — exactly what Karen asked for. Do NOT give a multi-day overview.
+5. If no jobs found: "I don't see any jobs scheduled for Monday April 13 yet. Want me to check a different date?"
+6. Only flag real actionable issues — a cleaner booked on their unavailable day, or an unassigned job. Do NOT flag things already resolved.
+
 SCHEDULING RULES:
 - When asked about today's schedule, jobs, assignments, or who is working where — use the live data above
 - Be specific with times, names, addresses and statuses. If a job is canceled, mention that
@@ -594,7 +722,8 @@ YOU ARE A STRATEGIC SCHEDULING PARTNER — not just an assistant:
 - You remember every past conversation and reference it naturally
 - You make specific actionable suggestions and implement them when approved
 - You learn from every interaction and get smarter every week
-- When Karen asks about the schedule, use get_schedule_intelligence to give her a real briefing, not generic answers
+- When Karen asks about a SPECIFIC date ("Monday April 13", "next Tuesday", "tomorrow") — use the pre-loaded specific date data or the fetch_day_schedule tool. Answer with ONLY that day. Keep it conversational and short.
+- When Karen asks a general question ("how's the week", "any issues this week") — use get_schedule_intelligence for a 7-day briefing
 - When you spot an issue, suggest a specific fix with suggest_schedule_change
 - Only implement changes after Karen explicitly approves
 
@@ -827,6 +956,16 @@ CATEGORY ASSIGNMENT — choose the most specific match:
           fact: { type: 'string', description: 'The new fact or information learned' }
         },
         required: ['subject', 'category', 'fact']
+      }
+    }, {
+      name: 'fetch_day_schedule',
+      description: 'Fetch the schedule for a SPECIFIC date from HouseCall Pro. Use when Karen asks about a specific day like "Monday April 13", "next Tuesday", "how does Friday look". Returns all jobs for that exact date with times, clients, and assigned cleaners.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          date: { type: 'string', description: 'Date in YYYY-MM-DD format (e.g. 2026-04-13). Parse from Karen\'s message — "Monday April 13" = 2026-04-13, "next Tuesday" = calculate the date, "tomorrow" = tomorrow\'s date.' }
+        },
+        required: ['date']
       }
     }, {
       name: 'send_email',
@@ -1519,6 +1658,22 @@ CATEGORY ASSIGNMENT — choose the most specific match:
       } catch (err) {
         console.error('[OFFBOARD] Failed:', err.message);
         twimlReply = `Sorry, the offboarding process hit an error. I'll note this and Karen can follow up manually. — LHS 🏠`;
+      }
+
+    } else if (toolUse && toolUse.name === 'fetch_day_schedule') {
+      const { date } = toolUse.input;
+      console.log(`[HCP] fetch_day_schedule tool called for: ${date}`);
+      try {
+        const result = await fetchJobsForDate(date);
+        const friendly = formatDateFriendly(date);
+        if (result.jobs.length === 0) {
+          twimlReply = `I don't see any jobs scheduled for ${friendly} yet. Would you like me to check a different date? — LHS 🏠`;
+        } else {
+          twimlReply = `${friendly} has ${result.jobs.length} jobs scheduled:\n${result.schedule.split('\n').slice(1).join('\n')}\n\n— LHS 🏠`;
+        }
+      } catch (err) {
+        console.error('[HCP] fetch_day_schedule error:', err.message);
+        twimlReply = `Sorry, I couldn't pull the schedule for that date. Try again? — LHS 🏠`;
       }
 
     } else if (toolUse && toolUse.name === 'get_schedule_intelligence') {
