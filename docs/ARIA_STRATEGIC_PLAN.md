@@ -74,6 +74,15 @@ Claude will read this document and give full status update.
   - Mobile responsive dashboard ✅
   - 12 real LHS tasks seeded ✅
 
+- Claude as 4th task assignee ✅
+- SMS conversation context memory (5 min TTL) ✅
+- Calendar day click — 30% detail panel ✅
+- Live Pacific time clock in dashboard ✅
+- Session starter page (start-session.html) ✅
+- Operations manual (guide.html — 12 sections) ✅
+- Equipment emergency SOP + Sunday check cron ✅
+- ElevenLabs support ticket documented ✅
+
 ### In Progress Right Now
 - Task system Phase 2 — intelligence layer
 
