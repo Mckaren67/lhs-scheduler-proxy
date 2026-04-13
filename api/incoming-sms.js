@@ -65,6 +65,53 @@ function escapeXml(str) {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// ─── SMS conversation context memory (5 minute TTL via Redis) ───────────────
+const KB_SAVE_URL = 'https://lhs-knowledge-base.vercel.app/api/save';
+
+async function getSmsContext(phone) {
+  try {
+    const key = 'sms_context_' + phone.replace(/\D/g, '').slice(-10);
+    const r = await fetch(`${KB_SAVE_URL}?key=${key}`);
+    const d = await r.json();
+    if (!d.value) return null;
+    // Check TTL — 5 minutes
+    if (d.value.createdAt && (Date.now() - new Date(d.value.createdAt).getTime()) > 300000) return null;
+    return d.value;
+  } catch { return null; }
+}
+
+async function setSmsContext(phone, context) {
+  try {
+    const key = 'sms_context_' + phone.replace(/\D/g, '').slice(-10);
+    await fetch(KB_SAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, value: { ...context, createdAt: new Date().toISOString() } }) });
+  } catch (e) { console.error('[CONTEXT] Save failed:', e.message); }
+}
+
+async function clearSmsContext(phone) {
+  try {
+    const key = 'sms_context_' + phone.replace(/\D/g, '').slice(-10);
+    await fetch(KB_SAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, value: null }) });
+  } catch {}
+}
+
+function mapAssigneeName(text, senderPhone) {
+  const t = (text || '').trim().toLowerCase();
+  if (t === 'michael' || t === 'mike') return 'michael';
+  if (t === 'karen') return 'karen';
+  if (t === 'aria') return 'aria';
+  if (t === 'claude') return 'claude';
+  if (t === 'me') {
+    const digits = senderPhone.replace(/\D/g, '');
+    if (digits.includes('6048009630')) return 'karen';
+    if (digits.includes('6042601925')) return 'michael';
+    return 'karen';
+  }
+  if (t === 'you') return 'aria';
+  return null;
+}
+
 // ─── Main handler ───────────────────────────────────────────────────────────
 
 export default async function handler(req, res) {
@@ -84,6 +131,22 @@ export default async function handler(req, res) {
   const isAdmin = ADMIN_PHONES.some(p => senderDigits.includes(p) || p.includes(senderDigits));
 
   console.log(`[ARIA] Incoming SMS from ${from} (admin: ${isAdmin}): "${incomingMessage}"`);
+
+  // ─── Check conversation context first ──────────────────────────────────
+  try {
+    const ctx = await getSmsContext(from);
+    if (ctx?.awaitingResponse === 'assignee' && ctx.taskId) {
+      const assignee = mapAssigneeName(incomingMessage, from);
+      if (assignee) {
+        const { updateTask } = await import('./_task-client.js');
+        await updateTask(ctx.taskId, { assigned_to: assignee });
+        await clearSmsContext(from);
+        const reply = `Done — "${ctx.taskTitle}" assigned to ${assignee[0].toUpperCase() + assignee.slice(1)}. — LHS`;
+        res.setHeader('Content-Type', 'text/xml');
+        return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(reply)}</Message>\n</Response>`);
+      }
+    }
+  } catch (e) { console.error('[CONTEXT] Check failed:', e.message); }
 
   // ─── Fetch data in parallel ─────────────────────────────────────────────
   const requestedDate = parseDateFromMessage(incomingMessage);
