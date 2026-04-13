@@ -179,6 +179,14 @@ export default async function handler(req, res) {
   <Message>${escapeXml(twimlReply)}</Message>
 </Response>`);
 
+    // Aria self-logging (non-blocking)
+    try {
+      const { logAriaAction } = await import('./_task-client.js');
+      const cat = toolUse ? (toolUse.name.includes('schedule') ? 'scheduling' : toolUse.name.includes('task') ? 'admin' : 'communications') : 'communications';
+      const saved = toolUse ? 5 : 3;
+      logAriaAction({ description: `Answered SMS: "${incomingMessage.substring(0, 60)}"`, category: cat, time_saved_minutes: saved, source_message: `SMS from ${from}` }).catch(() => {});
+    } catch {}
+
     // Save conversation summary (non-blocking)
     saveConversation({
       phone: from,

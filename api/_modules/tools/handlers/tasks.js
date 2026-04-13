@@ -1,7 +1,7 @@
 // Tool handlers: tasks — 3 handlers
 // Extracted from incoming-sms.js lines 1119–1199
 
-import { saveTask, completeTask, searchTasks, getOpenTasks, getOverdueTasks } from '../../../_task-store.js';
+import { saveTask, completeTask, updateTask, searchTasks, getOpenTasks, getOverdueTasks } from '../../../_task-client.js';
 import { TIMEZONE } from '../../shared/time.js';
 import { registerTool } from '../registry.js';
 
@@ -82,7 +82,25 @@ async function handleSearchTasks(input, ctx) {
   }
 }
 
+// ─── reassign_task ──────────────────────────────────────────────────────────
+
+async function handleReassignTask(input, ctx) {
+  const { search_query, new_assignee } = input;
+  console.log(`[TASKS] Reassign tool: "${search_query}" → ${new_assignee}`);
+  try {
+    const results = await searchTasks(search_query, 'open');
+    if (results.length === 0) return `I couldn't find an open task matching "${search_query}". Could you try different keywords? — LHS 🏠`;
+    const task = results[0];
+    await updateTask(task.id, { assigned_to: new_assignee });
+    return `Done — "${task.description}" is now assigned to ${new_assignee[0].toUpperCase() + new_assignee.slice(1)}. — LHS 🏠`;
+  } catch (err) {
+    console.error('[TASKS] Reassign failed:', err.message);
+    return `Sorry, I couldn't reassign that task. Please try again! — LHS 🏠`;
+  }
+}
+
 // Wire handlers into registry
 registerTool('save_task', null, handleSaveTask);
 registerTool('complete_task', null, handleCompleteTask);
 registerTool('search_tasks', null, handleSearchTasks);
+registerTool('reassign_task', null, handleReassignTask);

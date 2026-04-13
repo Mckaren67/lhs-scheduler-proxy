@@ -1,6 +1,6 @@
 export const config = { api: { bodyParser: false }, maxDuration: 30 };
 
-import { getEveningBriefingData } from './_task-store.js';
+import { getEveningBriefingData } from './_task-client.js';
 
 const KAREN_PHONE = '+16048009630';
 

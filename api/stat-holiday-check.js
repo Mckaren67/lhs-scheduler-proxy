@@ -1,6 +1,6 @@
 export const config = { api: { bodyParser: false }, maxDuration: 30 };
 
-import { saveTask } from './_task-store.js';
+import { saveTask } from './_task-client.js';
 
 const KAREN_PHONE = '+16048009630';
 

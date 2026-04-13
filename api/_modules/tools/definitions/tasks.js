@@ -30,10 +30,12 @@ export function registerTaskTools() {
       type: 'object',
       properties: {
         description: { type: 'string', description: 'Clear description of the task (e.g. "Follow up with Ladda about interview")' },
-        priority: { type: 'string', enum: ['high', 'medium', 'low'], description: 'Task priority' },
-        category: { type: 'string', enum: ['scheduling', 'client_followup', 'cleaner_followup', 'stat_holiday', 'new_client_onboarding', 'quality_control', 'accounts_receivable', 'accounts_payable', 'hiring', 'payroll_invoicing', 'supply_ordering', 'staff_management', 'administrative'], description: 'Task category' },
+        priority: { type: 'string', enum: ['urgent', 'important', 'normal'], description: 'Task priority — urgent for same-day/revenue-impacting, important for this-week, normal for general' },
+        category: { type: 'string', enum: ['scheduling', 'client', 'staff', 'ar', 'operations', 'admin', 'communications', 'urgent'], description: 'Task category — scheduling (jobs/reassign), client (follow-up/complaint), staff (cleaner/hiring), ar (invoice/payment), operations (supply/equipment), admin (SOP/data), communications (email/text/call), urgent (same-day critical)' },
         due_date: { type: 'string', description: buildDueDateDescription() },
-        assigned_to: { type: 'string', enum: ['karen', 'aria'], description: 'Who handles this. Default karen.' },
+        assigned_to: { type: 'string', enum: ['karen', 'aria', 'michael'], description: 'Who handles this. Default karen.' },
+        linked_client: { type: 'string', description: 'Client name if task is related to a specific client' },
+        linked_cleaner: { type: 'string', description: 'Cleaner name if task is related to a specific cleaner' },
         estimated_time_minutes: { type: 'number', description: 'Estimated minutes to complete' },
         notes: { type: 'string', description: 'Additional context or details' }
       },
@@ -65,6 +67,20 @@ export function registerTaskTools() {
         status_filter: { type: 'string', enum: ['open', 'completed', 'all'], description: 'Filter by status. Default: all.' }
       },
       required: ['search_query']
+    }
+  }, null);
+
+  // 4. reassign_task
+  registerTool('reassign_task', {
+    name: 'reassign_task',
+    description: 'Reassign a task to a different person. Use when Karen says "move X to Michael", "Aria take the X task", or "reassign X to Y".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        search_query: { type: 'string', description: 'Keywords to find the task to reassign' },
+        new_assignee: { type: 'string', enum: ['karen', 'aria', 'michael'], description: 'Who to reassign the task to' }
+      },
+      required: ['search_query', 'new_assignee']
     }
   }, null);
 }

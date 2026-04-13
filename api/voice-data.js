@@ -202,7 +202,7 @@ export default async function handler(req, res) {
     }
 
     if (action === 'task_list') {
-      const { getOpenTasks, getOverdueTasks } = await import('./_task-store.js');
+      const { getOpenTasks, getOverdueTasks } = await import('./_task-client.js');
       const tasks = await getOpenTasks();
       const overdue = await getOverdueTasks();
       if (tasks.length === 0) return res.status(200).json({ text: 'No open tasks right now. Your slate is clean!' });
@@ -229,7 +229,7 @@ export default async function handler(req, res) {
     }
 
     if (action === 'add_task' && req.method === 'POST') {
-      const { saveTask } = await import('./_task-store.js');
+      const { saveTask } = await import('./_task-client.js');
       const task = await saveTask({ description: req.body.description || 'Task from voice', priority: req.body.priority || 'medium', category: req.body.category || 'administrative', due_date: req.body.due_date || null, assigned_to: 'karen', source_message: 'Voice conversation' });
       return res.status(201).json({ text: `Got it! Saved "${task.description}".`, task });
     }

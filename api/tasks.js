@@ -1,6 +1,6 @@
 export const config = { api: { bodyParser: true } };
 
-import { saveTask, completeTask, deleteTask, updateTask, getOpenTasks, getAllCompletedTasks, getCompletedTasksInRange, searchTasks, forceHydrate } from './_task-store.js';
+import { saveTask, completeTask, deleteTask, updateTask, getOpenTasks, getAllCompletedTasks, getCompletedTasksInRange, searchTasks, forceHydrate } from './_task-client.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
