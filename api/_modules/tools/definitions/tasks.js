@@ -57,7 +57,7 @@ export function registerTaskTools() {
   // 3. search_tasks
   registerTool('search_tasks', {
     name: 'search_tasks',
-    description: 'Search tasks by keyword. Use when Karen asks about tasks, what is pending, whether something was done, or wants to see her task list.',
+    description: 'Search the TASK DASHBOARD (to-do items) by keyword. ONLY use when Karen explicitly asks about "tasks", "to-do list", "action items", or "task board". Do NOT use this for schedule questions — schedule questions about cleaning jobs should use the live HCP data in the system prompt or fetch_day_schedule tool instead.',
     input_schema: {
       type: 'object',
       properties: {
