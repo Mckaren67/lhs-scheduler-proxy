@@ -3,7 +3,7 @@
 // Architecture: ElevenLabs → voice-brain.js → Claude Haiku (streaming) → ElevenLabs speaks
 // Caller recognition: identifies callers by phone number, greets by name
 
-export const config = { api: { bodyParser: true }, maxDuration: 15 };
+export const config = { api: { bodyParser: true }, maxDuration: 30 };
 
 import { getPersonaContext, getManagementContext, getPersonaByPhone } from './_persona-store.js';
 
@@ -58,62 +58,38 @@ let memSchedule = null;
 let memScheduleAge = 0;
 const MEM_TTL = 10 * 60 * 1000;
 
+// Race a fetch against a timeout — returns null if too slow
+function fetchWithTimeout(url, opts = {}, ms = 1000) {
+  return Promise.race([
+    fetch(url, opts),
+    new Promise(r => setTimeout(() => r(null), ms))
+  ]);
+}
+
 async function getScheduleContext() {
-  // Tier 1: in-memory
+  // Tier 1: in-memory (instant — 0ms)
   if (memSchedule && (Date.now() - memScheduleAge) < MEM_TTL) return memSchedule;
 
-  // Tier 2: KB cache
+  // Tier 2: KB cache with strict 1s timeout (never block a live call)
   try {
-    const resp = await fetch(`${KB_SAVE_URL}?key=aria_voice_cache`);
-    const data = await resp.json();
-    if (data.value?.schedule) {
-      memSchedule = data.value.schedule;
-      memScheduleAge = Date.now();
-      return memSchedule;
+    const resp = await fetchWithTimeout(`${KB_SAVE_URL}?key=aria_voice_cache`, {}, 1000);
+    if (resp?.ok) {
+      const data = await resp.json();
+      if (data.value?.schedule) {
+        memSchedule = data.value.schedule;
+        memScheduleAge = Date.now();
+        return memSchedule;
+      }
     }
   } catch (e) {}
 
-  // Tier 3: live HCP fetch
-  try {
-    const apiKey = process.env.HCP_API_KEY;
-    const now = new Date(new Date().toLocaleString('en-US', { timeZone: TIMEZONE }));
-    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-    const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 2).toISOString();
+  // Tier 3: NEVER do live HCP fetch during a call — too slow.
+  // Fire a background cache refresh instead (fire-and-forget).
+  fetchWithTimeout('https://lhs-scheduler-proxy.vercel.app/api/voice-cache', {
+    headers: { 'Authorization': `Bearer ${process.env.INTERNAL_SECRET}` }
+  }, 500).catch(() => {});
 
-    const [jr, cr] = await Promise.all([
-      fetch(`https://api.housecallpro.com/jobs?scheduled_start_min=${start}&scheduled_start_max=${end}&page_size=200`,
-        { headers: { 'Authorization': `Token ${apiKey}`, 'Accept': 'application/json' } }),
-      fetch('https://lhs-knowledge-base.vercel.app/api/clients').catch(() => null)
-    ]);
-
-    const jobs = jr.ok ? ((await jr.json()).jobs || []).filter(j => j.work_status !== 'pro canceled' && !j.deleted_at) : [];
-    let roster = [];
-    if (cr?.ok) { const cd = await cr.json(); roster = (cd.cleaners || []).filter(c => c.days?.length > 0); }
-
-    const todayStr = now.toLocaleDateString('en-CA', { timeZone: TIMEZONE });
-    const tom = new Date(now); tom.setDate(tom.getDate() + 1);
-    const tomStr = tom.toLocaleDateString('en-CA', { timeZone: TIMEZONE });
-
-    let text = '';
-    for (const d of [{ l: `TODAY (${todayStr})`, dt: todayStr }, { l: `TOMORROW (${tomStr})`, dt: tomStr }]) {
-      const dj = jobs.filter(j => j.schedule?.scheduled_start && new Date(j.schedule.scheduled_start).toLocaleDateString('en-CA', { timeZone: TIMEZONE }) === d.dt);
-      text += `${d.l}: ${dj.length} jobs.\n`;
-      for (const j of dj) {
-        const c = `${j.customer?.first_name || ''} ${j.customer?.last_name || ''}`.trim();
-        const e = (j.assigned_employees || []).map(x => `${x.first_name} ${x.last_name}`.trim()).join(' and ') || 'UNASSIGNED';
-        const t = new Date(j.schedule.scheduled_start).toLocaleTimeString('en-CA', { timeZone: TIMEZONE, hour: 'numeric', minute: '2-digit' });
-        text += `- ${c} at ${t}, assigned to ${e}, ${j.work_status}.\n`;
-      }
-      text += '\n';
-    }
-    text += 'CLEANER ROSTER (ONLY these names exist):\n';
-    for (const c of roster) text += `- ${c.name}\n`;
-    memSchedule = text;
-    memScheduleAge = Date.now();
-    return text;
-  } catch (e) {
-    return 'Schedule data unavailable.';
-  }
+  return 'Schedule data is still loading. Tell the caller you need a moment to pull up the schedule and ask what specifically they want to know.';
 }
 
 // ─── Pacific time helpers (DST-aware via America/Vancouver) ─────────────────
@@ -333,7 +309,7 @@ export default async function handler(req, res) {
   const stream = body.stream === true;
 
   try {
-    // Identify caller by phone number
+    // Identify caller — instant, no network (just checks KNOWN_CALLERS map)
     const caller = identifyCaller(body);
     if (caller.identified) {
       console.log(`[VOICE-BRAIN] Caller identified: ${caller.fullName} (${caller.role}) from ${caller.phone}`);
@@ -341,28 +317,19 @@ export default async function handler(req, res) {
       console.log(`[VOICE-BRAIN] Unknown caller: ${caller.phone}`);
     }
 
+    // Fetch schedule with strict timeout — never blocks more than 1s
     const schedule = await getScheduleContext();
 
-    // Extract names from user's latest message to load relevant personas
-    const lastUserMsg = [...messages].reverse().find(m => m.role === 'user')?.content || '';
-    let personaContext = '';
-    try {
-      // If caller is unknown, try to look up by phone in HCP
-      if (!caller.identified && caller.phone) {
-        const phonePersona = await getPersonaByPhone(caller.phone);
-        if (phonePersona) personaContext = phonePersona + '\n';
-      }
-
-      const nameContext = await getPersonaContext(lastUserMsg);
-      if (nameContext) personaContext += nameContext + '\n';
-      personaContext += await getManagementContext();
-    } catch (e) {}
+    // Skip persona lookups during live calls — they add 500-2000ms of latency.
+    // The system prompt already contains enough context for natural conversation.
+    const personaContext = '';
 
     const systemPrompt = buildSystemPrompt(schedule, personaContext, caller);
     const claudeMessages = messages.filter(m => m.role === 'user' || m.role === 'assistant').map(m => ({ role: m.role, content: m.content }));
     if (claudeMessages.length === 0) claudeMessages.push({ role: 'user', content: 'Hello' });
 
     const cacheLoad = Date.now() - startTime;
+    console.log(`[VOICE-BRAIN] Context loaded in ${cacheLoad}ms`);
 
     if (stream) {
       // ─── STREAMING MODE — SSE chunks for ElevenLabs ─────────────────
