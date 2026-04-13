@@ -2,47 +2,78 @@
 
 ## 13. Task System Build Plan
 
-### Phase 1 — Core System — Build First
-Everything Karen needs to replace her paper notebook:
+### Phase 1 — Core System — Build First — IN PROGRESS
+Status: Starting today April 13 2026
+Goal: Get Karen off her paper notebook immediately
+
+Features to build:
 - 8 task categories with auto-classification
 - Auto-assignment Karen, Aria, Michael
 - Time estimation per task
-- Delegation buttons on dashboard — tap to reassign
+- Delegation buttons — tap to reassign on dashboard
 - Overdue task alerts via SMS
 - Task creation via SMS to Aria
-- Recurring tasks — daily, weekly, monthly
-- End of day summary with time saved by Aria
+- Recurring tasks — daily weekly monthly
+- End of day summary with Aria time saved
 - Aria logs everything she does as completed tasks
 - Mobile optimized dashboard
 - Search and filter on dashboard
 
 ### Phase 2 — Intelligence Layer — Build After Phase 1 Stable
-- Task templates — new client, offboarding, complaint etc
+Status: NOT STARTED
+Features:
+- Task templates — new client, offboarding, complaint
 - Client and cleaner linked tasks
 - Task notes via SMS and voice
 - Snooze and reschedule with SMS reminder
 - Weekly Monday morning report
-- Task ROI calculator — dollar value of Aria's work
+- Task ROI calculator — dollar value of Aria work
 - Aria proactive task suggestions
 - HCP auto task creation on events
 
 ### Phase 3 — Commercial Features — Build Month 2
+Status: NOT STARTED
+Features:
 - White label ready for Playbook platform
 - Multi-business support
 - Advanced analytics and reporting
-- API for third party integrations
 
-### Build Rules
-- Complete Phase 1 fully before starting Phase 2
-- Each phase must be stable and Karen-approved before next
-- Never mix phases in same Claude Code session
-- Test every feature with real data before marking done
+### How To Resume Any Session
+Say: "Where are we on the project?"
+Claude will read this document and give full status update.
 
-### Current Status
-- Phase 1: IN PROGRESS — building today April 13 2026
-- Phase 2: NOT STARTED
-- Phase 3: NOT STARTED
+## 14. Current Build Status — Update This After Every Session
 
-### How To Resume
-At start of any session say:
-"Please read ARIA_STRATEGIC_PLAN.md and tell me what phase we are on and what needs to be done next"
+### Completed and Live
+- SMS brain — incoming-sms.js modular refactor ✅
+- SMS date specific schedule queries ✅
+- SMS schedule vs tasks intent detection ✅
+- Voice line — ElevenLabs native Twilio integration ✅
+- Dashboard — tasks.html loading correctly ✅
+- Upstash Redis permanent storage ✅
+- 177 clients and 20 cleaners in knowledge base ✅
+- 28 page SOP library ingested ✅
+- Caller recognition — Karen and Michael ✅
+- Employee offboarding SOP ✅
+- Daily learning SMS at 7pm ✅
+- Evening summary ✅
+- TMOR system ✅
+- Time awareness — Pacific time with daylight saving ✅
+- Persona memory — all cleaners and clients ✅
+
+### In Progress Right Now
+- Task system Phase 1 build — starting today
+
+### Next On The List After Task System Phase 1
+1. Karen introduction call and demo
+2. Port 604-260-1925 decision
+3. Cowork mobile tasks setup
+4. Dialpad API key in Vercel
+5. 19 client reassignments — Emily F, Lorissa W, Julieta S
+6. Voice three-way meeting mode
+7. Payroll calculator
+8. Task system Phase 2
+
+### Pending Decisions
+- Port 604-260-1925 — yes or no?
+- HCP CSR AI $140/month — yes or no?
