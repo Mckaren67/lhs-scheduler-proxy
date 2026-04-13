@@ -5,31 +5,31 @@
 export const config = { api: { bodyParser: true }, maxDuration: 60 };
 
 // ─── Shared utilities ────────────────────────────────────────────────────────
-import { getPacificDateTime } from './modules/shared/time.js';
+import { getPacificDateTime } from './_modules/shared/time.js';
 
 // ─── Schedule modules ────────────────────────────────────────────────────────
-import { fetchTodaysJobs, parseDateFromMessage, fetchJobsForDate } from './modules/schedule/fetch.js';
-import { getCachedPatterns } from './modules/schedule/patterns.js';
-import { fetchClientPreferences, buildScheduleContext } from './modules/schedule/context.js';
-import { formatDateFriendly } from './modules/shared/time.js';
+import { fetchTodaysJobs, parseDateFromMessage, fetchJobsForDate } from './_modules/schedule/fetch.js';
+import { getCachedPatterns } from './_modules/schedule/patterns.js';
+import { fetchClientPreferences, buildScheduleContext } from './_modules/schedule/context.js';
+import { formatDateFriendly } from './_modules/shared/time.js';
 
 // ─── Prompt builder ──────────────────────────────────────────────────────────
-import { buildSystemPrompt } from './modules/prompt/builder.js';
+import { buildSystemPrompt } from './_modules/prompt/builder.js';
 
 // ─── Tool registry + all definitions (import triggers registration) ──────────
-import { getToolDefinitions, getToolHandler } from './modules/tools/registry.js';
-import './modules/tools/definitions/scheduling.js';
-import './modules/tools/definitions/tasks.js';
-import './modules/tools/definitions/operations.js';
-import './modules/tools/definitions/communication.js';
-import './modules/tools/definitions/notes.js';
+import { getToolDefinitions, getToolHandler } from './_modules/tools/registry.js';
+import './_modules/tools/definitions/scheduling.js';
+import './_modules/tools/definitions/tasks.js';
+import './_modules/tools/definitions/operations.js';
+import './_modules/tools/definitions/communication.js';
+import './_modules/tools/definitions/notes.js';
 
 // ─── Handler imports (import triggers handler wiring into registry) ──────────
-import './modules/tools/handlers/scheduling.js';
-import './modules/tools/handlers/tasks.js';
-import './modules/tools/handlers/operations.js';
-import './modules/tools/handlers/communication.js';
-import './modules/tools/handlers/notes.js';
+import './_modules/tools/handlers/scheduling.js';
+import './_modules/tools/handlers/tasks.js';
+import './_modules/tools/handlers/operations.js';
+import './_modules/tools/handlers/communication.js';
+import './_modules/tools/handlers/notes.js';
 
 // ─── Memory (conversation history + caller context) ──────────────────────────
 import { saveConversation, buildCallerContext } from './aria-memory.js';

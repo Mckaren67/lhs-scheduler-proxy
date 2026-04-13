@@ -1,7 +1,7 @@
 // Tool handlers: tasks — 3 handlers
 // Extracted from incoming-sms.js lines 1119–1199
 
-import { saveTask, completeTask, searchTasks, getOpenTasks, getOverdueTasks } from '../../../task-store.js';
+import { saveTask, completeTask, searchTasks, getOpenTasks, getOverdueTasks } from '../../../_task-store.js';
 import { TIMEZONE } from '../../shared/time.js';
 import { registerTool } from '../registry.js';
 

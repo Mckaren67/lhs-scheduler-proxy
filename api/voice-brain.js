@@ -5,7 +5,7 @@
 
 export const config = { api: { bodyParser: true }, maxDuration: 15 };
 
-import { getPersonaContext, getManagementContext, getPersonaByPhone } from './persona-store.js';
+import { getPersonaContext, getManagementContext, getPersonaByPhone } from './_persona-store.js';
 
 // ─── Known callers — phone (last 10 digits) → identity ────────────────────
 const KNOWN_CALLERS = {

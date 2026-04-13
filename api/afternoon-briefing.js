@@ -3,7 +3,7 @@
 
 export const config = { api: { bodyParser: false }, maxDuration: 30 };
 
-import { getOpenTasks, getOverdueTasks } from './task-store.js';
+import { getOpenTasks, getOverdueTasks } from './_task-store.js';
 import { getCapacityData } from './capacity-check.js';
 import { sendEmail } from './aria-email.js';
 
