@@ -306,7 +306,12 @@ export default async function handler(req, res) {
   const startTime = Date.now();
   const body = req.body || {};
   const messages = body.messages || [];
-  const stream = body.stream === true;
+  // ElevenLabs may send stream as true, "true", or omit it entirely
+  const stream = body.stream === true || body.stream === 'true';
+
+  // Log the incoming request for debugging ElevenLabs integration
+  console.log(`[VOICE-BRAIN] Incoming POST — stream: ${body.stream} (${typeof body.stream}), messages: ${messages.length}, keys: ${Object.keys(body).join(',')}`);
+  if (messages.length > 0) console.log(`[VOICE-BRAIN] Last message role: ${messages[messages.length-1]?.role}, content: "${(messages[messages.length-1]?.content||'').substring(0,60)}"`);
 
   try {
     // Identify caller — instant, no network (just checks KNOWN_CALLERS map)
@@ -352,6 +357,16 @@ export default async function handler(req, res) {
           messages: claudeMessages
         })
       });
+
+      if (!claudeResp.ok) {
+        const errText = await claudeResp.text();
+        console.error(`[VOICE-BRAIN] Claude API error in stream: ${claudeResp.status} — ${errText.substring(0, 200)}`);
+        // Fall back to a valid non-streaming response ElevenLabs can use
+        return res.status(200).json({
+          id: `chatcmpl-${Date.now()}`, object: 'chat.completion', model: 'aria-voice-brain',
+          choices: [{ index: 0, message: { role: 'assistant', content: "Let me check on that — can you text me at 778-200-6517 and I'll look it up right away." }, finish_reason: 'stop' }]
+        });
+      }
 
       const id = `chatcmpl-${Date.now()}`;
       let firstChunkSent = false;
@@ -439,17 +454,24 @@ export default async function handler(req, res) {
       });
     }
   } catch (err) {
-    console.error('[VOICE-BRAIN] Error:', err.message);
+    console.error('[VOICE-BRAIN] Error:', err.message, err.stack?.substring(0, 200));
     const fallback = "I'm having a moment — text me at 778-200-6517 and I'll check right away.";
-    if (body.stream) {
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.write(`data: ${JSON.stringify({ id: `chatcmpl-${Date.now()}`, object: 'chat.completion.chunk', model: 'aria-voice-brain', choices: [{ index: 0, delta: { content: fallback }, finish_reason: 'stop' }] })}\n\n`);
-      res.write('data: [DONE]\n\n');
-      return res.end();
+    try {
+      if (res.headersSent) {
+        // Headers already sent (streaming started) — try to write error as SSE
+        res.write(`data: ${JSON.stringify({ id: `chatcmpl-${Date.now()}`, object: 'chat.completion.chunk', model: 'aria-voice-brain', choices: [{ index: 0, delta: { content: fallback }, finish_reason: 'stop' }] })}\n\n`);
+        res.write('data: [DONE]\n\n');
+        return res.end();
+      }
+      // Headers not sent — return JSON (works for both streaming and non-streaming requests)
+      return res.status(200).json({
+        id: `chatcmpl-${Date.now()}`, object: 'chat.completion', model: 'aria-voice-brain',
+        choices: [{ index: 0, message: { role: 'assistant', content: fallback }, finish_reason: 'stop' }]
+      });
+    } catch (e2) {
+      console.error('[VOICE-BRAIN] Double fault:', e2.message);
+      // Last resort — just end the response
+      if (!res.writableEnded) res.end();
     }
-    return res.status(200).json({
-      id: `chatcmpl-${Date.now()}`, object: 'chat.completion', model: 'aria-voice-brain',
-      choices: [{ index: 0, message: { role: 'assistant', content: fallback }, finish_reason: 'stop' }]
-    });
   }
 }
