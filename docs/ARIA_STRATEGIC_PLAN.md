@@ -2,8 +2,8 @@
 
 ## 13. Task System Build Plan
 
-### Phase 1 — Core System — Build First — IN PROGRESS
-Status: Starting today April 13 2026
+### Phase 1 — Core System — COMPLETE
+Status: COMPLETED April 13 2026 — all 10 tests pass
 Goal: Get Karen off her paper notebook immediately
 
 Features to build:
@@ -61,8 +61,21 @@ Claude will read this document and give full status update.
 - Time awareness — Pacific time with daylight saving ✅
 - Persona memory — all cleaners and clients ✅
 
+- Task system Phase 1 — complete, all features live ✅
+  - 8-category auto-classification ✅
+  - 3-person assignment (Karen/Aria/Michael) ✅
+  - Time estimation per task ✅
+  - Delegation buttons on dashboard ✅
+  - Task creation via SMS ✅
+  - Task reassignment via SMS ✅
+  - Recurring tasks (daily/weekly/monthly) ✅
+  - Aria self-logging with time saved ✅
+  - Aria Impact panel on dashboard ✅
+  - Mobile responsive dashboard ✅
+  - 12 real LHS tasks seeded ✅
+
 ### In Progress Right Now
-- Task system Phase 1 build — starting today
+- Task system Phase 2 — intelligence layer
 
 ### Next On The List After Task System Phase 1
 1. Karen introduction call and demo
