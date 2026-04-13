@@ -27,10 +27,13 @@ export default async function handler(req, res) {
     const { signed_url } = await resp.json();
     console.log('[VOICE] Got signed URL, connecting caller to ElevenLabs');
 
+    // Escape & → &amp; for valid XML (URL contains query params with &)
+    const xmlSafeUrl = signed_url.replace(/&/g, '&amp;');
+
     return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <Stream url="${signed_url}" />
+    <Stream url="${xmlSafeUrl}" />
   </Connect>
 </Response>`);
   } catch (err) {
