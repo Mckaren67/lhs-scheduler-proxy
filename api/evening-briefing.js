@@ -61,52 +61,60 @@ export default async function handler(req, res) {
       fetchTodayJobCount()
     ]);
 
-    // Build the evening message
-    let msg = `Good evening, Karen! 🌙\n\n`;
+    // Fetch per-contributor stats
+    const stats = briefing.ariaImpact || {};
+    const contributors = briefing.contributors || {};
+    const aiValue = briefing.aiValue || {};
+    const todayStr = new Date().toLocaleDateString('en-US', { timeZone: 'America/Vancouver', weekday: 'long', month: 'long', day: 'numeric' });
 
-    // Completed today
-    if (briefing.completedToday.length > 0) {
-      msg += `Completed today: ${briefing.completedToday.length} task${briefing.completedToday.length !== 1 ? 's' : ''} ✅\n`;
-      for (const t of briefing.completedToday.slice(0, 3)) {
-        msg += `• ${t.description} ✓\n`;
-      }
-      if (briefing.completedToday.length > 3) {
-        msg += `...and ${briefing.completedToday.length - 3} more\n`;
-      }
-    } else {
-      msg += `No tasks completed today — fresh start tomorrow!\n`;
-    }
+    // Build contributor lines
+    function fmtMin(m) { return m >= 60 ? `~${(m/60).toFixed(1)} hrs` : `~${m} min`; }
+    const kS = contributors.karen || {};
+    const mS = contributors.michael || {};
+    const aS = contributors.aria || {};
+    const cS = contributors.claude || {};
 
-    // Still open
-    msg += `\nStill open: ${briefing.stillOpen.length} task${briefing.stillOpen.length !== 1 ? 's' : ''}\n`;
+    let taskLines = '';
+    if (kS.completedToday) taskLines += `Karen: ${kS.completedToday} tasks — approx. ${kS.minutesToday} min\n`;
+    if (mS.completedToday) taskLines += `Michael: ${mS.completedToday} tasks — approx. ${mS.minutesToday} min\n`;
+    if (aS.completedToday) taskLines += `Aria: ${aS.completedToday} tasks — saved ${fmtMin(aS.minutesToday)}\n`;
+    if (cS.completedToday) taskLines += `Claude: ${cS.completedToday} tasks — saved ${fmtMin(cS.minutesToday)}\n`;
+    if (!taskLines) taskLines = 'No tasks completed today — fresh start tomorrow!\n';
 
-    // Tomorrow priorities
-    if (briefing.tomorrowPriorities.length > 0) {
-      msg += `\nTop priorities for tomorrow:\n`;
-      for (const t of briefing.tomorrowPriorities.slice(0, 5)) {
+    const aiDollars = aiValue.dollarsToday || 0;
+
+    // Pending urgent tasks
+    const open = briefing.stillOpen || 0;
+    const urgent = (briefing.tomorrowPriorities || []).slice(0, 3);
+
+    // Karen's priorities for tomorrow
+    const karenTomorrow = (briefing.tomorrowPriorities || []).filter(t => t.assigned_to === 'karen').slice(0, 3);
+
+    let msg = `Good evening NAME!\nLHS wrap-up for ${todayStr}:\n\n`;
+    msg += `TASKS TODAY:\n${taskLines}`;
+    if (aiDollars > 0) msg += `AI value today: $${aiDollars} at $25/hr\n`;
+    msg += `\n${jobCount} jobs on schedule today.\n`;
+
+    if (urgent.length > 0) {
+      msg += `\nSTILL PENDING:\n`;
+      for (const t of urgent) {
         const overdue = t.due_date && t.due_date < new Date().toLocaleDateString('en-CA', { timeZone: 'America/Vancouver' });
-        const flag = overdue ? ' (overdue!)' : '';
-        msg += `• ${t.description}${flag}\n`;
+        msg += `• ${t.description}${overdue ? ' (overdue!)' : ''}\n`;
       }
     }
 
-    // Jobs summary
-    msg += `\n${jobCount} job${jobCount !== 1 ? 's' : ''} on the schedule today.\n`;
-
-    // Time saved
-    if (briefing.estimatedMinutesSaved > 0) {
-      const hrs = briefing.estimatedMinutesSaved / 60;
-      const timeStr = hrs >= 1 ? `~${hrs.toFixed(1)} hrs` : `~${briefing.estimatedMinutesSaved} min`;
-      msg += `Aria saved you ${timeStr} today! 🎉\n`;
+    if (karenTomorrow.length > 0) {
+      msg += `\nKAREN'S PRIORITIES TOMORROW:\n`;
+      for (const t of karenTomorrow) msg += `• ${t.description}\n`;
     }
 
-    msg += `\nRest up tonight — I've got the overnight covered! — Aria 🏠`;
+    msg += `\n— Aria 🏠`;
 
-    // Send to both Karen and Michael
+    // Send to both Karen and Michael with personalized greeting
     const MICHAEL_PHONE = '+16046180336';
     const [karenResult, michaelResult] = await Promise.all([
-      sendSMS(KAREN_PHONE, msg),
-      sendSMS(MICHAEL_PHONE, msg.replace('Karen', 'Michael'))
+      sendSMS(KAREN_PHONE, msg.replace('NAME', 'Karen')),
+      sendSMS(MICHAEL_PHONE, msg.replace('NAME', 'Michael'))
     ]);
     console.log(`[EVENING] Karen:`, karenResult.sid ? `SID ${karenResult.sid}` : 'failed');
     console.log(`[EVENING] Michael:`, michaelResult.sid ? `SID ${michaelResult.sid}` : 'failed');

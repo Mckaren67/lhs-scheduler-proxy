@@ -111,7 +111,9 @@ export async function getEveningBriefingData() {
     stillOpen: stats.totalActive || 0,
     tomorrowPriorities,
     estimatedMinutesSaved: stats.ariaImpact?.savedTodayMinutes || 0,
-    ariaImpact: stats.ariaImpact || {}
+    ariaImpact: stats.ariaImpact || {},
+    contributors: stats.contributors || {},
+    aiValue: stats.aiValue || {}
   };
 }
 
