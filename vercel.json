@@ -27,6 +27,10 @@
     {
       "path": "/api/dialpad-learner-cron",
       "schedule": "7 * * * *"
+    },
+    {
+      "path": "/api/evening-briefing",
+      "schedule": "0 2 * * *"
     }
   ]
 }

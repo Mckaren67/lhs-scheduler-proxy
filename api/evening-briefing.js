@@ -102,15 +102,22 @@ export default async function handler(req, res) {
 
     msg += `\nRest up tonight — I've got the overnight covered! — Aria 🏠`;
 
-    const result = await sendSMS(KAREN_PHONE, msg);
-    console.log(`[EVENING] Briefing sent:`, result.sid ? `SID ${result.sid}` : 'failed');
+    // Send to both Karen and Michael
+    const MICHAEL_PHONE = '+16046180336';
+    const [karenResult, michaelResult] = await Promise.all([
+      sendSMS(KAREN_PHONE, msg),
+      sendSMS(MICHAEL_PHONE, msg.replace('Karen', 'Michael'))
+    ]);
+    console.log(`[EVENING] Karen:`, karenResult.sid ? `SID ${karenResult.sid}` : 'failed');
+    console.log(`[EVENING] Michael:`, michaelResult.sid ? `SID ${michaelResult.sid}` : 'failed');
 
     return res.status(200).json({
       ok: true,
       completedToday: briefing.completedToday.length,
       stillOpen: briefing.stillOpen.length,
       jobCount,
-      messageSid: result.sid || null
+      karenSid: karenResult.sid || null,
+      michaelSid: michaelResult.sid || null
     });
 
   } catch (err) {
