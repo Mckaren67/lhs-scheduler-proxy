@@ -90,6 +90,13 @@ Claude will read this document and give full status update.
   - Dedup tracking prevents reprocessing
   - 7 calls processed, 26 learnings, 11 tasks created
 
+- Payroll status tracking system ✅
+- Tuesday 9am payroll reminder SMS cron ✅
+- 7pm evening summary cron + 4 contributors ✅
+- PAYROLL SMS keyword handler ✅
+- Task cleanup and dedup audit ✅
+- Jenna Braich dispute consolidated ✅
+
 ### In Progress Right Now
 - Task system Phase 2 — intelligence layer
 
