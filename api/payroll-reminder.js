@@ -33,11 +33,13 @@ export default async function handler(req, res) {
     const statusMap = { open: 'hours not yet confirmed', confirmed: 'hours confirmed — ready for calculator', submitted: 'submitted to Bill Gee', processed: 'fully processed' };
     const statusText = statusMap[period?.status] || period?.status || 'unknown';
 
-    const msg = `Good morning! Payroll reminder 📋\n\nPeriod: ${period?.startDate || '?'} to ${period?.endDate || '?'}\nStatus: ${statusText}\nDue: Wednesday — ${pd.daysUntilDue || '?'} day${pd.daysUntilDue !== 1 ? 's' : ''} away\n\nCalculator: aistudio.google.com/app/apps/82328746-e0d6-41ec-9059-9e5f3f2cae31\n\nText PAYROLL for full status.\nText 'Payroll confirmed' when hours are done.\n— Aria 🏠`;
+    const karenMsg = `Good morning Karen! Payroll is due tomorrow Wednesday.\nPlease confirm cleaner hours in HCP today and run through the calculator:\naistudio.google.com/app/apps/82328746-e0d6-41ec-9059-9e5f3f2cae31\nText me 'Payroll confirmed' when hours are done. — Aria`;
+
+    const michaelMsg = `Good morning Michael — payroll reminder.\nTomorrow is payroll day.\nKaren has been notified to confirm hours today. Text PAYROLL for current status. — Aria`;
 
     const [karenR, michaelR] = await Promise.all([
-      sendSMS('+16048009630', msg),
-      sendSMS('+16046180336', msg)
+      sendSMS('+16048009630', karenMsg),
+      sendSMS('+16046180336', michaelMsg)
     ]);
 
     console.log(`[PAYROLL-REMIND] Karen: ${karenR.sid || 'failed'} | Michael: ${michaelR.sid || 'failed'}`);
