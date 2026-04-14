@@ -109,11 +109,16 @@ export default async function handler(req, res) {
   const startTime = Date.now();
   const body = req.body || {};
   const messages = body.messages || [];
-  const stream = body.stream === true;
+  // ElevenLabs may send stream as boolean true or string "true"
+  const stream = body.stream === true || body.stream === 'true';
+
+  // Log request for debugging Twilio vs widget differences
+  console.log(`[VOICE-BRAIN] POST — stream:${body.stream}(${typeof body.stream}) msgs:${messages.length} model:${body.model} tools:${body.tools?.length || 0} keys:${Object.keys(body).join(',')}`);
 
   try {
     const schedule = await getScheduleContext();
     const systemPrompt = buildSystemPrompt(schedule);
+    // Filter to only user/assistant messages (skip system messages from ElevenLabs)
     const claudeMessages = messages.filter(m => m.role === 'user' || m.role === 'assistant').map(m => ({ role: m.role, content: m.content }));
     if (claudeMessages.length === 0) claudeMessages.push({ role: 'user', content: 'Hello' });
 
@@ -140,6 +145,16 @@ export default async function handler(req, res) {
           messages: claudeMessages
         })
       });
+
+      // Check Claude responded OK before streaming
+      if (!claudeResp.ok) {
+        const errText = await claudeResp.text().catch(() => 'unknown');
+        console.error(`[VOICE-BRAIN] Claude error ${claudeResp.status}: ${errText.substring(0, 200)}`);
+        const errId = `chatcmpl-${Date.now()}`;
+        res.write(`data: ${JSON.stringify({ id: errId, object: 'chat.completion.chunk', created: Math.floor(Date.now()/1000), model: body.model || 'aria-voice-brain', choices: [{ index: 0, delta: { content: "I'm having a brief connection issue. Text me at 778-200-6517 and I'll help right away." }, finish_reason: 'stop' }] })}\n\n`);
+        res.write('data: [DONE]\n\n');
+        return res.end();
+      }
 
       const id = `chatcmpl-${Date.now()}`;
       let firstChunkSent = false;
@@ -227,17 +242,31 @@ export default async function handler(req, res) {
       });
     }
   } catch (err) {
-    console.error('[VOICE-BRAIN] Error:', err.message);
-    const fallback = "I'm having a moment Karen. Text me at 778-200-6517 and I'll check right away.";
-    if (body.stream) {
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.write(`data: ${JSON.stringify({ id: `chatcmpl-${Date.now()}`, object: 'chat.completion.chunk', model: 'aria-voice-brain', choices: [{ index: 0, delta: { content: fallback }, finish_reason: 'stop' }] })}\n\n`);
-      res.write('data: [DONE]\n\n');
-      return res.end();
+    console.error('[VOICE-BRAIN] Error:', err.message, err.stack?.substring(0, 200));
+    const fallback = "I'm having a brief technical issue. Text me at 778-200-6517 and I'll help right away.";
+    const modelName = body.model || 'aria-voice-brain';
+    try {
+      if (res.headersSent) {
+        // Headers already sent — write SSE error
+        res.write(`data: ${JSON.stringify({ id: `chatcmpl-${Date.now()}`, object: 'chat.completion.chunk', model: modelName, choices: [{ index: 0, delta: { content: fallback }, finish_reason: 'stop' }] })}\n\n`);
+        res.write('data: [DONE]\n\n');
+        return res.end();
+      }
+      if (stream) {
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.write(`data: ${JSON.stringify({ id: `chatcmpl-${Date.now()}`, object: 'chat.completion.chunk', model: modelName, choices: [{ index: 0, delta: { content: fallback }, finish_reason: 'stop' }] })}\n\n`);
+        res.write('data: [DONE]\n\n');
+        return res.end();
+      }
+      return res.status(200).json({
+        id: `chatcmpl-${Date.now()}`, object: 'chat.completion', model: modelName,
+        choices: [{ index: 0, message: { role: 'assistant', content: fallback }, finish_reason: 'stop' }]
+      });
+    } catch (e2) {
+      console.error('[VOICE-BRAIN] Double fault:', e2.message);
+      if (!res.writableEnded) res.end();
     }
-    return res.status(200).json({
-      id: `chatcmpl-${Date.now()}`, object: 'chat.completion', model: 'aria-voice-brain',
-      choices: [{ index: 0, message: { role: 'assistant', content: fallback }, finish_reason: 'stop' }]
-    });
   }
 }
