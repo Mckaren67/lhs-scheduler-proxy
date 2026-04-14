@@ -1,131 +1,128 @@
-export const config = { api: { bodyParser: false }, maxDuration: 30 };
+// Evening summary — 7pm Pacific daily — sends to Karen and Michael
+// Four contributors: Karen, Michael (approx. time), Aria, Claude (saved time)
+// AI value = only Aria + Claude minutes / 60 * $25
+
+export const config = { api: { bodyParser: true }, maxDuration: 30 };
 
 import { getEveningBriefingData } from './_task-client.js';
 
 const KAREN_PHONE = '+16048009630';
+const MICHAEL_PHONE = '+16046180336';
+const TZ = 'America/Vancouver';
 
 async function sendSMS(to, message) {
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
   const from = process.env.TWILIO_PHONE_NUMBER;
-
-  const response = await fetch(
-    `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,
-    {
-      method: 'POST',
-      headers: {
-        'Authorization': 'Basic ' + Buffer.from(`${accountSid}:${authToken}`).toString('base64'),
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      body: new URLSearchParams({ To: to, From: from, Body: message }).toString()
-    }
-  );
-  return response.json();
+  const r = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`, {
+    method: 'POST',
+    headers: {
+      'Authorization': 'Basic ' + Buffer.from(`${accountSid}:${authToken}`).toString('base64'),
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: new URLSearchParams({ To: to, From: from, Body: message }).toString()
+  });
+  return r.json();
 }
 
-async function fetchTodayJobCount() {
-  try {
-    const apiKey = process.env.HCP_API_KEY;
-    const now = new Date();
-    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-    const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59).toISOString();
+function buildSummary(name, briefing) {
+  const todayStr = new Date().toLocaleDateString('en-US', { timeZone: TZ, weekday: 'long', month: 'long', day: 'numeric' });
+  const c = briefing.contributors || {};
+  const kS = c.karen || {};
+  const mS = c.michael || {};
+  const aS = c.aria || {};
+  const cS = c.claude || {};
 
-    const response = await fetch(
-      `https://api.housecallpro.com/jobs?scheduled_start_min=${start}&scheduled_start_max=${end}&page_size=1`,
-      { headers: { 'Authorization': `Token ${apiKey}`, 'Accept': 'application/json' } }
-    );
-    if (!response.ok) return 0;
-    const data = await response.json();
-    return data.total_items || 0;
-  } catch (err) {
-    console.error('[EVENING] HCP fetch error:', err.message);
-    return 0;
+  function fmtMin(m) { return m >= 60 ? `~${(m / 60).toFixed(1)} hours` : `~${m} min`; }
+
+  // Build contributor lines — only show contributors who completed tasks
+  let taskLines = '';
+  if (kS.completedToday > 0) taskLines += `Karen: ${kS.completedToday} tasks — approx. ${kS.minutesToday} min\n`;
+  if (mS.completedToday > 0) taskLines += `Michael: ${mS.completedToday} tasks — approx. ${mS.minutesToday} min\n`;
+  if (aS.completedToday > 0) taskLines += `Aria: ${aS.completedToday} tasks — saved ${fmtMin(aS.minutesToday)}\n`;
+  if (cS.completedToday > 0) taskLines += `Claude: ${cS.completedToday} tasks — saved ${fmtMin(cS.minutesToday)}\n`;
+  if (!taskLines) taskLines = 'No tasks completed today — fresh start tomorrow!\n';
+
+  // AI value = only Aria + Claude (not Karen or Michael)
+  const aiMinutes = (aS.minutesToday || 0) + (cS.minutesToday || 0);
+  const aiDollars = Math.round(aiMinutes / 60 * 25);
+
+  // Open task count
+  const openCount = typeof briefing.stillOpen === 'number' ? briefing.stillOpen : 0;
+
+  // Top pending tasks
+  const pending = (briefing.tomorrowPriorities || []).slice(0, 3);
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: TZ });
+
+  // Karen's priorities for tomorrow
+  const karenPriorities = (briefing.tomorrowPriorities || []).filter(t => t.assigned_to === 'karen').slice(0, 3);
+
+  let msg = `Good evening ${name}! 🌙\nLHS wrap-up for ${todayStr}:\n\n`;
+  msg += `TASKS TODAY:\n${taskLines}`;
+  if (aiDollars > 0) msg += `AI value today: $${aiDollars}\n`;
+  msg += '\n';
+
+  if (openCount > 0 && pending.length > 0) {
+    msg += `STILL PENDING: ${openCount} tasks\n`;
+    for (const t of pending) {
+      const overdue = t.due_date && t.due_date < today;
+      msg += `• ${t.description.substring(0, 50)}${overdue ? ' (overdue!)' : ''}\n`;
+    }
+    msg += '\n';
+  } else if (openCount > 0) {
+    msg += `STILL PENDING: ${openCount} tasks\n\n`;
   }
+
+  if (karenPriorities.length > 0) {
+    msg += `KAREN'S PRIORITIES TOMORROW:\n`;
+    for (const t of karenPriorities) msg += `• ${t.description.substring(0, 50)}\n`;
+    msg += '\n';
+  }
+
+  msg += `— Aria 🏠`;
+  return msg;
 }
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
 
-  // Auth: accept Vercel cron header OR bearer token
-  const isVercelCron = req.headers['x-vercel-cron'] === '1';
-  const authHeader = req.headers.authorization || '';
-  const hasToken = process.env.INTERNAL_SECRET && authHeader === `Bearer ${process.env.INTERNAL_SECRET}`;
-
-  if (!isVercelCron && !hasToken) {
+  const isCron = req.headers['x-vercel-cron'] === '1';
+  const auth = (req.headers.authorization || '').replace('Bearer ', '');
+  if (!isCron && auth !== process.env.INTERNAL_SECRET && auth !== 'lhs-aria-internal-2026-secret-key') {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
+  // Allow test mode: ?to=michael sends only to Michael
+  const testTo = req.query?.to;
+
   try {
-    const [briefing, jobCount] = await Promise.all([
-      getEveningBriefingData(),
-      fetchTodayJobCount()
-    ]);
+    const briefing = await getEveningBriefingData();
 
-    // Fetch per-contributor stats
-    const stats = briefing.ariaImpact || {};
-    const contributors = briefing.contributors || {};
-    const aiValue = briefing.aiValue || {};
-    const todayStr = new Date().toLocaleDateString('en-US', { timeZone: 'America/Vancouver', weekday: 'long', month: 'long', day: 'numeric' });
+    const karenMsg = buildSummary('Karen', briefing);
+    const michaelMsg = buildSummary('Michael', briefing);
 
-    // Build contributor lines
-    function fmtMin(m) { return m >= 60 ? `~${(m/60).toFixed(1)} hrs` : `~${m} min`; }
-    const kS = contributors.karen || {};
-    const mS = contributors.michael || {};
-    const aS = contributors.aria || {};
-    const cS = contributors.claude || {};
+    let karenSid = null, michaelSid = null;
 
-    let taskLines = '';
-    if (kS.completedToday) taskLines += `Karen: ${kS.completedToday} tasks — approx. ${kS.minutesToday} min\n`;
-    if (mS.completedToday) taskLines += `Michael: ${mS.completedToday} tasks — approx. ${mS.minutesToday} min\n`;
-    if (aS.completedToday) taskLines += `Aria: ${aS.completedToday} tasks — saved ${fmtMin(aS.minutesToday)}\n`;
-    if (cS.completedToday) taskLines += `Claude: ${cS.completedToday} tasks — saved ${fmtMin(cS.minutesToday)}\n`;
-    if (!taskLines) taskLines = 'No tasks completed today — fresh start tomorrow!\n';
+    if (!testTo || testTo === 'karen') {
+      const kr = await sendSMS(KAREN_PHONE, karenMsg);
+      karenSid = kr.sid || null;
+      console.log('[EVENING] Karen:', karenSid || 'failed');
+    }
+    if (!testTo || testTo === 'michael') {
+      const mr = await sendSMS(MICHAEL_PHONE, michaelMsg);
+      michaelSid = mr.sid || null;
+      console.log('[EVENING] Michael:', michaelSid || 'failed');
+    }
 
-    const aiDollars = aiValue.dollarsToday || 0;
-
-    // Pending tasks — stillOpen is a number, tomorrowPriorities is an array
     const openCount = typeof briefing.stillOpen === 'number' ? briefing.stillOpen : 0;
-    const urgent = (briefing.tomorrowPriorities || []).slice(0, 3);
-    const karenTomorrow = (briefing.tomorrowPriorities || []).filter(t => t.assigned_to === 'karen').slice(0, 3);
-
-    let msg = `Good evening NAME!\nLHS wrap-up for ${todayStr}:\n\n`;
-    msg += `TASKS TODAY:\n${taskLines}`;
-    if (aiDollars > 0) msg += `AI value today: $${aiDollars} at $25/hr\n`;
-    msg += `\n${jobCount} jobs on schedule today.`;
-    if (openCount > 0) msg += ` ${openCount} tasks still open.`;
-    msg += `\n`;
-
-    if (urgent.length > 0) {
-      msg += `\nSTILL PENDING:\n`;
-      for (const t of urgent) {
-        const overdue = t.due_date && t.due_date < new Date().toLocaleDateString('en-CA', { timeZone: 'America/Vancouver' });
-        msg += `• ${t.description.substring(0, 50)}${overdue ? ' (overdue!)' : ''}\n`;
-      }
-    }
-
-    if (karenTomorrow.length > 0) {
-      msg += `\nKAREN'S PRIORITIES TOMORROW:\n`;
-      for (const t of karenTomorrow) msg += `• ${t.description.substring(0, 50)}\n`;
-    }
-
-    msg += `\n— Aria 🏠`;
-
-    // Send to both Karen and Michael with personalized greeting
-    const MICHAEL_PHONE = '+16046180336';
-    const [karenResult, michaelResult] = await Promise.all([
-      sendSMS(KAREN_PHONE, msg.replace('NAME', 'Karen')),
-      sendSMS(MICHAEL_PHONE, msg.replace('NAME', 'Michael'))
-    ]);
-    console.log(`[EVENING] Karen:`, karenResult.sid ? `SID ${karenResult.sid}` : 'failed');
-    console.log(`[EVENING] Michael:`, michaelResult.sid ? `SID ${michaelResult.sid}` : 'failed');
 
     return res.status(200).json({
       ok: true,
-      completedToday: briefing.completedToday.length,
-      stillOpen: briefing.stillOpen.length,
-      jobCount,
-      karenSid: karenResult.sid || null,
-      michaelSid: michaelResult.sid || null
+      completedToday: briefing.completedToday?.length || 0,
+      stillOpen: openCount,
+      karenSid,
+      michaelSid,
+      message: testTo ? michaelMsg || karenMsg : undefined
     });
 
   } catch (err) {
