@@ -83,6 +83,13 @@ Claude will read this document and give full status update.
 - Equipment emergency SOP + Sunday check cron ✅
 - ElevenLabs support ticket documented ✅
 
+- Dialpad call learning integration ✅
+  - Hourly cron fetches Dialpad AI recaps
+  - Claude extracts learnings per call
+  - Auto-creates tasks from action items
+  - Dedup tracking prevents reprocessing
+  - 7 calls processed, 26 learnings, 11 tasks created
+
 ### In Progress Right Now
 - Task system Phase 2 — intelligence layer
 
