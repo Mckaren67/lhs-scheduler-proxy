@@ -83,29 +83,29 @@ export default async function handler(req, res) {
 
     const aiDollars = aiValue.dollarsToday || 0;
 
-    // Pending urgent tasks
-    const open = briefing.stillOpen || 0;
+    // Pending tasks — stillOpen is a number, tomorrowPriorities is an array
+    const openCount = typeof briefing.stillOpen === 'number' ? briefing.stillOpen : 0;
     const urgent = (briefing.tomorrowPriorities || []).slice(0, 3);
-
-    // Karen's priorities for tomorrow
     const karenTomorrow = (briefing.tomorrowPriorities || []).filter(t => t.assigned_to === 'karen').slice(0, 3);
 
     let msg = `Good evening NAME!\nLHS wrap-up for ${todayStr}:\n\n`;
     msg += `TASKS TODAY:\n${taskLines}`;
     if (aiDollars > 0) msg += `AI value today: $${aiDollars} at $25/hr\n`;
-    msg += `\n${jobCount} jobs on schedule today.\n`;
+    msg += `\n${jobCount} jobs on schedule today.`;
+    if (openCount > 0) msg += ` ${openCount} tasks still open.`;
+    msg += `\n`;
 
     if (urgent.length > 0) {
       msg += `\nSTILL PENDING:\n`;
       for (const t of urgent) {
         const overdue = t.due_date && t.due_date < new Date().toLocaleDateString('en-CA', { timeZone: 'America/Vancouver' });
-        msg += `• ${t.description}${overdue ? ' (overdue!)' : ''}\n`;
+        msg += `• ${t.description.substring(0, 50)}${overdue ? ' (overdue!)' : ''}\n`;
       }
     }
 
     if (karenTomorrow.length > 0) {
       msg += `\nKAREN'S PRIORITIES TOMORROW:\n`;
-      for (const t of karenTomorrow) msg += `• ${t.description}\n`;
+      for (const t of karenTomorrow) msg += `• ${t.description.substring(0, 50)}\n`;
     }
 
     msg += `\n— Aria 🏠`;
