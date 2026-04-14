@@ -148,6 +148,56 @@ export default async function handler(req, res) {
     }
   } catch (e) { console.error('[CONTEXT] Check failed:', e.message); }
 
+  // ─── Payroll keyword handler ───────────────────────────────────────────
+  const msgLower = incomingMessage.trim().toLowerCase();
+  const PAYROLL_API = 'https://lhs-knowledge-base.vercel.app/api/payroll';
+  const PAYROLL_TOKEN = process.env.INTERNAL_SECRET || 'lhs-aria-internal-2026-secret-key';
+  const PAYROLL_H = { 'Authorization': `Bearer ${PAYROLL_TOKEN}`, 'Content-Type': 'application/json' };
+
+  try {
+    let payrollReply = null;
+
+    if (msgLower === 'payroll' || msgLower.includes('payroll status') || msgLower.includes('pay period')) {
+      const pr = await fetch(PAYROLL_API, { headers: PAYROLL_H });
+      const pd = await pr.json();
+      const p = pd.current;
+      if (p) {
+        const statusMap = { open: 'Open — hours not yet confirmed', confirmed: 'Confirmed — ready for calculator', submitted: 'Submitted to Bill Gee', processed: 'Fully processed' };
+        payrollReply = `Payroll Status — ${p.startDate} to ${p.endDate}\nStatus: ${statusMap[p.status] || p.status}\nDue: ${pd.nextPayrollDue || 'TBD'} (${pd.daysUntilDue} days)\nCalculator: aistudio.google.com/app/apps/82328746-e0d6-41ec-9059-9e5f3f2cae31\n\nText 'Payroll confirmed' when hours are done and I will take it from there. — Aria`;
+      }
+    } else if (msgLower.includes('payroll confirmed') || msgLower.includes('hours confirmed')) {
+      const pr = await fetch(PAYROLL_API, { headers: PAYROLL_H });
+      const pd = await pr.json();
+      if (pd.current) {
+        await fetch(PAYROLL_API, { method: 'POST', headers: PAYROLL_H, body: JSON.stringify({ periodId: pd.current.id, status: 'confirmed' }) });
+        payrollReply = `Payroll hours confirmed for ${pd.current.startDate} to ${pd.current.endDate}. Run through the calculator and submit to Bill Gee when ready.\nText 'Payroll submitted' when done. — Aria`;
+      }
+    } else if (msgLower.includes('payroll submitted') || msgLower.includes('sent to bill gee')) {
+      const pr = await fetch(PAYROLL_API, { headers: PAYROLL_H });
+      const pd = await pr.json();
+      if (pd.current) {
+        await fetch(PAYROLL_API, { method: 'POST', headers: PAYROLL_H, body: JSON.stringify({ periodId: pd.current.id, status: 'submitted' }) });
+        const now = new Date().toLocaleString('en-CA', { timeZone: 'America/Vancouver', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+        payrollReply = `Logged — payroll submitted to Bill Gee on ${now}. I will follow up Friday if not yet confirmed processed. — Aria`;
+      }
+    } else if (msgLower.includes('payroll processed') || msgLower.includes('bill confirmed') || msgLower.includes('qbo done')) {
+      const pr = await fetch(PAYROLL_API, { headers: PAYROLL_H });
+      const pd = await pr.json();
+      if (pd.current) {
+        await fetch(PAYROLL_API, { method: 'POST', headers: PAYROLL_H, body: JSON.stringify({ periodId: pd.current.id, status: 'processed' }) });
+        const nextStart = new Date(pd.current.endDate + 'T12:00:00'); nextStart.setDate(nextStart.getDate() + 1);
+        const nextEnd = new Date(nextStart); nextEnd.setDate(nextEnd.getDate() + 6);
+        payrollReply = `Payroll for ${pd.current.startDate} to ${pd.current.endDate} fully processed. New period ${nextStart.toLocaleDateString('en-CA')} to ${nextEnd.toLocaleDateString('en-CA')} is now open. Great work! — Aria`;
+      }
+    }
+
+    if (payrollReply) {
+      console.log(`[ARIA] Payroll keyword handled: "${incomingMessage}"`);
+      res.setHeader('Content-Type', 'text/xml');
+      return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(payrollReply)}</Message>\n</Response>`);
+    }
+  } catch (e) { console.error('[PAYROLL-SMS] Error:', e.message); }
+
   // ─── Fetch data in parallel ─────────────────────────────────────────────
   const requestedDate = parseDateFromMessage(incomingMessage);
   const todayDate = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Vancouver' });
