@@ -102,6 +102,13 @@ Claude will read this document and give full status update.
 - Task cleanup and dedup audit ✅
 - Jenna Braich dispute consolidated ✅
 
+- HCP write operations module ✅
+  - reassignJob, rescheduleJob, addJobNote, createCustomer
+  - Employee ID mapping with cache
+  - getJobsForCleaner, findAvailableCleaners
+  - All 6 operations tested against live HCP API
+- Fuzzy name matching for clients and cleaners ✅
+
 ### In Progress Right Now
 - Task system Phase 2 — intelligence layer
 
