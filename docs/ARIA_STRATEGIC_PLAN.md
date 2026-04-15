@@ -109,19 +109,35 @@ Claude will read this document and give full status update.
   - All 6 operations tested against live HCP API
 - Fuzzy name matching for clients and cleaners ✅
 
-### In Progress Right Now
-- Task system Phase 2 — intelligence layer
+- Payroll April 7-13 COMPLETED April 15 2026 ✅
+- 4 industry research documents analyzed ✅
+- 18 action items (A-R) framework designed ✅
+- Team Lead framework designed ✅
+- LHS Reliability Program designed ✅
+- Karen interview findings documented ✅
+- Karen meeting agenda prepared ✅
 
-### Next On The List After Task System Phase 1
-1. Karen introduction call and demo
-2. Port 604-260-1925 decision
-3. Cowork mobile tasks setup
-4. Dialpad API key in Vercel
-5. 19 client reassignments — Emily F, Lorissa W, Julieta S
-6. Voice three-way meeting mode
-7. Payroll calculator
-8. Task system Phase 2
+### In Progress Right Now
+- HCP webhook receiver (I) — highest priority
+- Sick day protocol wired into HCP writes (M)
+- Karen meeting prep — Thu/Fri/Sat this week
+
+### Next Build Session Priorities
+1. HCP webhook receiver /api/hcp-webhook
+2. Job completed automation (J)
+3. Job canceled automation (K)
+4. Invoice payment failed automation (L)
+5. Client notes session prep for Karen meeting (N)
+
+### Action Items F-H — Starting Next Week
+F. Designate 2 Residential Daytime Team Leads
+G. Schedule Freeze — Employee Facing (Two-Tier)
+H. Lockout Fee Policy
 
 ### Pending Decisions
+- Team Lead candidates — Karen and Michael to decide
+- Team Lead pay premium amount
+- HCP plan level — Basic Essentials or MAX?
+- HCP CSR AI $140/month trial — yes or no?
+- 1Password Business — now or closer to sale?
 - Port 604-260-1925 — yes or no?
-- HCP CSR AI $140/month — yes or no?
