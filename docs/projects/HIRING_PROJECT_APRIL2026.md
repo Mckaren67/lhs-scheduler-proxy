@@ -38,3 +38,37 @@ Below 15: Decline
 
 ## Status
 Active — urgent
+
+---
+
+## Saturday April 18 2026 — Candidate Status Updates
+
+### Karen Corrie — 21/25 phone screen PASSED
+- Can start Monday April 20
+- Karen M: "sounds mature — has cleaned in homes"
+- Decision: **Advanced to trial — schedule this week**
+
+### Felicia Wilson — CONDITIONAL
+- Available now
+- Schedule: Mon/Tue/Thu/Fri 9–3, Wed 9–2
+- No daycare summer — works until ~June 20
+- Decision: **Hire if better candidates not found**
+- Status: **Hold — do not contact yet**
+
+### Louise Savoie — ADVANCING
+- Messaged us — completed JotForm
+- Phone: 604-799-9623 confirmed
+- Status: **Phone screen needed today**
+
+### Haley Edworthy — HOT LIST
+- Candidate #010 — see `candidates/HALEY_EDWORTHY.md`
+- Replied to outreach — stand-in cleaning experience
+- Score: 26/35
+- Status: **Phone screen needed today urgently**
+
+## Felicia Wilson Decision Framework
+
+Hire Felicia only if:
+- Louise Savoie fails screen
+
+_[Framework incomplete — remaining criteria to be added.]_
