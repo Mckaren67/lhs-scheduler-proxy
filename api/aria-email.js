@@ -25,13 +25,25 @@ function encodeBase64Url(str) {
   return Buffer.from(str, 'utf-8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
+// RFC 2047 encoded-word: wrap non-ASCII subjects so mail clients decode them
+// as UTF-8 instead of defaulting to Latin-1 (which produces mojibake like
+// "Ã¢Â€Â"" for em-dashes).
+function encodeSubject(subject) {
+  if (!subject) return '';
+  if (/^[\x00-\x7F]*$/.test(subject)) return subject;
+  const b64 = Buffer.from(subject, 'utf-8').toString('base64');
+  return `=?UTF-8?B?${b64}?=`;
+}
+
 function buildRawEmail({ to, subject, body, isHtml = false }) {
   const contentType = isHtml ? 'text/html' : 'text/plain';
   const raw = [
+    'MIME-Version: 1.0',
     `From: Karen McLaren <${KAREN_EMAIL}>`,
     `To: ${to}`,
-    `Subject: ${subject}`,
-    `Content-Type: ${contentType}; charset=utf-8`,
+    `Subject: ${encodeSubject(subject)}`,
+    `Content-Type: ${contentType}; charset=UTF-8`,
+    'Content-Transfer-Encoding: 8bit',
     '',
     body
   ].join('\r\n');

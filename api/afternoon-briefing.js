@@ -65,6 +65,175 @@ async function fetchTomorrowJobs() {
   }
 }
 
+// ─── Email rendering — The Bridge design system ─────────────────────────────
+// Colors (The Bridge):
+//   Header blue:    #2563EB   |  Page bg:       #F8F9FA
+//   Card bg:        #FFFFFF   |  Body text:     #111827
+//   Secondary:      #6B7280   |  Border:        #E5E7EB
+//   Accent green:   #16A34A   |  Accent red:    #DC2626
+//   Accent amber:   #D97706
+// All special characters are HTML entities to avoid any charset ambiguity.
+
+function escapeHtml(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function formatJobForEmail(job) {
+  const client = `${job.customer?.first_name || ''} ${job.customer?.last_name || ''}`.trim() || 'Unknown client';
+  const emps = (job.assigned_employees || []).map(e => `${e.first_name || ''} ${e.last_name || ''}`.trim()).filter(Boolean);
+  const cleaner = emps.length > 0 ? emps.join(' &amp; ') : null;
+  const time = job.schedule?.scheduled_start
+    ? new Date(job.schedule.scheduled_start).toLocaleTimeString('en-CA', {
+        timeZone: TIMEZONE, hour: 'numeric', minute: '2-digit', hour12: true
+      }).toUpperCase()
+    : 'Time TBD';
+  const street = job.address?.street || '';
+  const city = job.address?.city || '';
+  const address = street ? `${street}${city ? ', ' + city : ''}` : '';
+  return { time, client: escapeHtml(client), cleaner, address: escapeHtml(address), unassigned: !cleaner };
+}
+
+function renderJobCard(job) {
+  const cleanerLine = job.unassigned
+    ? `<span style="color:#DC2626;font-weight:600;">NO CLEANER ASSIGNED</span>`
+    : `<span style="color:#111827;">Cleaner: <strong>${job.cleaner}</strong></span>`;
+  const addressLine = job.address
+    ? `<div style="font-size:13px;color:#6B7280;margin-top:6px;">${job.address}</div>`
+    : '';
+  return `
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#F8F9FA;border:1px solid #E5E7EB;border-radius:12px;margin:0 0 12px 0;">
+    <tr>
+      <td style="padding:14px 16px;">
+        <div style="font-size:15px;font-weight:600;color:#111827;letter-spacing:0.2px;">
+          ${escapeHtml(job.time)} &mdash; ${job.client}
+        </div>
+        <div style="font-size:13px;margin-top:6px;">${cleanerLine}</div>
+        ${addressLine}
+      </td>
+    </tr>
+  </table>`;
+}
+
+function renderFlagsSection(flags) {
+  if (flags.length === 0) return '';
+  const items = flags.map(f => `<li style="margin:4px 0;">${f}</li>`).join('');
+  return `
+  <tr>
+    <td style="padding:4px 28px 16px 28px;">
+      <div style="background:#FEF3C7;border:1px solid #FCD34D;border-radius:12px;padding:14px 16px;">
+        <div style="font-weight:700;color:#92400E;margin-bottom:6px;font-size:14px;letter-spacing:0.4px;text-transform:uppercase;">
+          &#9888;&#65039; Flags &amp; Attention
+        </div>
+        <ul style="margin:0;padding-left:20px;color:#92400E;font-size:14px;line-height:1.5;">
+          ${items}
+        </ul>
+      </div>
+    </td>
+  </tr>`;
+}
+
+function renderBriefingEmail({ tomorrowDay, tomorrowDate, jobs, openTasks, overdue, capData, holiday }) {
+  const jobList = (jobs || []).map(formatJobForEmail);
+  const count = jobList.length;
+
+  // Build flags
+  const flags = [];
+  const unassigned = jobList.filter(j => j.unassigned);
+  if (unassigned.length > 0) {
+    flags.push(`<strong>${unassigned.length}</strong> unassigned job${unassigned.length !== 1 ? 's' : ''} &mdash; needs a cleaner before the morning.`);
+  }
+  if (overdue && overdue.length > 0) {
+    flags.push(`<strong>${overdue.length}</strong> overdue task${overdue.length !== 1 ? 's' : ''} in your list.`);
+  }
+  if (capData && capData.capacity >= 90) {
+    flags.push(`Workforce at <strong>${capData.capacity}%</strong> capacity &mdash; urgent, consider hiring.`);
+  } else if (capData && capData.capacity >= 80) {
+    flags.push(`Workforce at <strong>${capData.capacity}%</strong> capacity &mdash; watch closely.`);
+  }
+  if (holiday) {
+    const daysUntil = Math.ceil((new Date(holiday.date) - new Date()) / 86400000);
+    flags.push(`${escapeHtml(holiday.name)} is <strong>${daysUntil}</strong> day${daysUntil !== 1 ? 's' : ''} away (${holiday.date}).`);
+  }
+
+  // Jobs section
+  const jobsHtml = count === 0
+    ? `<p style="margin:0;color:#6B7280;font-size:14px;font-style:italic;">No jobs scheduled tomorrow &mdash; enjoy the quiet day.</p>`
+    : jobList.map(renderJobCard).join('');
+
+  // Top priorities (from open tasks)
+  const top = (openTasks || []).slice(0, 5);
+  const prioritiesHtml = top.length === 0 ? '' : `
+  <tr>
+    <td style="padding:4px 28px 8px 28px;">
+      <h2 style="margin:0 0 12px 0;font-size:13px;color:#111827;text-transform:uppercase;letter-spacing:0.6px;">Top Priorities</h2>
+      <ul style="margin:0 0 4px 0;padding-left:20px;color:#111827;font-size:14px;line-height:1.6;">
+        ${top.map(t => {
+          const due = t.due_date ? ` <span style="color:#6B7280;font-size:12px;">(due ${escapeHtml(t.due_date)})</span>` : '';
+          return `<li>${escapeHtml(t.description)}${due}</li>`;
+        }).join('')}
+      </ul>
+    </td>
+  </tr>`;
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>Your Tomorrow at LHS</title>
+</head>
+<body style="margin:0;padding:0;background:#F8F9FA;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;color:#111827;-webkit-font-smoothing:antialiased;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#F8F9FA;padding:24px 12px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;background:#FFFFFF;border-radius:12px;overflow:hidden;border:1px solid #E5E7EB;">
+          <tr>
+            <td style="background:#2563EB;padding:24px 28px;text-align:center;">
+              <div style="color:#FFFFFF;font-size:20px;font-weight:700;letter-spacing:0.3px;">Lifestyle Home Service</div>
+              <div style="color:#BFDBFE;font-size:13px;margin-top:4px;letter-spacing:0.4px;">Powered by Aria</div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:28px 28px 4px 28px;">
+              <h1 style="margin:0;font-size:24px;color:#111827;font-weight:700;letter-spacing:-0.2px;">Your Tomorrow at LHS</h1>
+              <p style="margin:6px 0 0 0;color:#6B7280;font-size:14px;">${escapeHtml(tomorrowDay)}, ${escapeHtml(tomorrowDate)}</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:20px 28px 8px 28px;">
+              <h2 style="margin:0 0 12px 0;font-size:13px;color:#111827;text-transform:uppercase;letter-spacing:0.6px;">Schedule</h2>
+              <p style="margin:0 0 14px 0;color:#6B7280;font-size:14px;">
+                <strong style="color:#16A34A;">${count}</strong> job${count !== 1 ? 's' : ''} scheduled
+              </p>
+              ${jobsHtml}
+            </td>
+          </tr>
+          ${renderFlagsSection(flags)}
+          ${prioritiesHtml}
+          <tr>
+            <td style="padding:20px 28px 28px 28px;border-top:1px solid #E5E7EB;">
+              <p style="margin:0;color:#111827;font-size:15px;line-height:1.5;">Rest well tonight &mdash; Aria has tomorrow covered.</p>
+              <p style="margin:12px 0 0 0;color:#6B7280;font-size:13px;">
+                &mdash; Aria, your LHS scheduling partner
+              </p>
+            </td>
+          </tr>
+        </table>
+        <p style="max-width:600px;color:#6B7280;font-size:12px;text-align:center;margin:16px auto 0 auto;">
+          Automated briefing &middot; Lifestyle Home Service
+        </p>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+}
+
 function getUpcomingHoliday() {
   const now = new Date(new Date().toLocaleString('en-US', { timeZone: TIMEZONE }));
   const todayStr = now.toLocaleDateString('en-CA');
@@ -154,41 +323,19 @@ export default async function handler(req, res) {
     // Also send a formatted HTML email
     let emailSent = false;
     try {
-      const topTasks5 = openTasks.slice(0, 5);
-      const htmlBody = `
-<div style="font-family:-apple-system,sans-serif;max-width:600px;margin:0 auto;color:#1a1a18">
-  <div style="background:#2d6a4f;color:#fff;padding:20px 24px;border-radius:10px 10px 0 0">
-    <h1 style="margin:0;font-size:22px">Our Tomorrow at LHS</h1>
-    <p style="margin:4px 0 0;opacity:0.8;font-size:14px">${tomorrowDay}, ${tomorrowDate}</p>
-  </div>
-  <div style="background:#fff;padding:24px;border:1px solid #e0e0dc;border-top:0;border-radius:0 0 10px 10px">
-    <h3 style="color:#2d6a4f;margin:0 0 8px">📅 Schedule</h3>
-    <p>${tomorrowData.count} job${tomorrowData.count !== 1 ? 's' : ''} scheduled tomorrow</p>
-
-    ${topTasks5.length > 0 ? `
-    <h3 style="color:#2d6a4f;margin:16px 0 8px">🎯 Our Top Priorities</h3>
-    <ul style="padding-left:20px">
-      ${topTasks5.map(t => `<li>${t.description}${t.due_date ? ` <span style="color:#9b9b98;font-size:12px">(${t.due_date})</span>` : ''}</li>`).join('')}
-    </ul>` : ''}
-
-    ${overdue.length > 0 ? `
-    <h3 style="color:#c0392b;margin:16px 0 8px">⚠️ Overdue</h3>
-    <p>${overdue.length} item${overdue.length !== 1 ? 's' : ''} need attention</p>` : ''}
-
-    ${capData && capData.capacity >= 70 ? `
-    <h3 style="color:#b5631a;margin:16px 0 8px">📊 Capacity</h3>
-    <p>Workforce at ${capData.capacity}%${capData.trend !== 0 ? ` (${capData.trend > 0 ? 'up' : 'down'} ${Math.abs(capData.trend)}% from last week)` : ''}</p>` : ''}
-
-    <div style="margin-top:24px;padding-top:16px;border-top:1px solid #e0e0dc;color:#6b6b68;font-size:13px">
-      <p>Rest well tonight — I've got tomorrow covered! 🏠</p>
-      <p style="margin-top:8px">— Aria, your LHS scheduling partner</p>
-    </div>
-  </div>
-</div>`;
+      const htmlBody = renderBriefingEmail({
+        tomorrowDay,
+        tomorrowDate,
+        jobs: tomorrowData.jobs,
+        openTasks,
+        overdue,
+        capData,
+        holiday
+      });
 
       await sendEmail({
         to: KAREN_EMAIL,
-        subject: `Our Tomorrow at LHS — ${tomorrowDay}, ${tomorrowDate}`,
+        subject: `Your Tomorrow at LHS — ${tomorrowDay}, ${tomorrowDate}`,
         body: htmlBody,
         isHtml: true
       });
